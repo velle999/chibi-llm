@@ -67,7 +67,7 @@ pip install faster-whisper piper-tts pyaudio yfinance requests --break-system-pa
 # tar xzf piper_linux_aarch64.tar.gz -C ~/piper
 
 # Clone/copy the project
-cd chibi-avatar
+cd chibi-llm
 
 # Edit config — set your PC's IP address + customize!
 nano config.py
