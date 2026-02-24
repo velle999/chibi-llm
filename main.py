@@ -464,6 +464,10 @@ class ChibiAvatarApp:
             if self._message_count % 6 == 0 and len(self.conversation) >= 4:
                 threading.Thread(target=self._extract_memories, daemon=True).start()
 
+            # Pause mic before speaking to prevent feedback loop
+            if self.voice_in and self.voice_in.is_listening:
+                self.voice_in.stop_listening()
+
             # Speak the response
             if self.voice_out and full_response:
                 self.voice_out.speak(full_response)
@@ -475,9 +479,18 @@ class ChibiAvatarApp:
                 tts_wait_start = time.time()
                 while self.voice_out.busy and (time.time() - tts_wait_start) < 30:
                     time.sleep(0.1)
-                time.sleep(0.5)
+                # Extra settle time so mic doesn't catch tail end of audio
+                time.sleep(0.8)
             else:
                 time.sleep(2.0)
+
+            # Resume mic listening
+            if self.voice_in and self.config.voice_enabled:
+                # Drain any stale transcriptions
+                while self.voice_in.get_transcription() is not None:
+                    pass
+                self.voice_in.start_listening()
+
             if not self.is_generating:
                 self.set_state(AvatarState.IDLE)
 
@@ -494,8 +507,12 @@ class ChibiAvatarApp:
     def update(self, dt):
         self.state_timer += dt
 
-        # Poll voice input
-        if self.voice_in and not self.is_generating:
+        # Poll voice input — BUT only when we're not speaking or generating
+        # This prevents the mic from picking up espeak/piper output (feedback loop)
+        is_speaking = self.voice_out and self.voice_out.is_speaking if self.voice_out else False
+        mic_safe = not self.is_generating and not is_speaking
+
+        if self.voice_in and mic_safe:
             # Show listening state when mic is active
             if self.voice_in.is_recording and self.state == AvatarState.IDLE:
                 self.set_state(AvatarState.LISTENING)
@@ -505,6 +522,10 @@ class ChibiAvatarApp:
             transcription = self.voice_in.get_transcription()
             if transcription:
                 self.send_message(transcription)
+        elif self.voice_in and not mic_safe:
+            # Drain any transcriptions that came in while speaking (they're just echo)
+            while self.voice_in.get_transcription() is not None:
+                pass
 
         # Auto-sleep after inactivity
         if (self.state == AvatarState.IDLE and
