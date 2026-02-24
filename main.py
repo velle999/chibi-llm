@@ -21,6 +21,7 @@ from voice_input import VoiceInput
 from voice_output import VoiceOutput
 from data_feeds import DataFeedManager
 from hud_overlay import HUDOverlay
+from memory import PersistentMemory
 from config import Config
 
 # ─── Avatar States ───────────────────────────────────────────────────────────
@@ -360,6 +361,11 @@ class ChibiAvatarApp:
         self.feeds = DataFeedManager(self.config)
         self.hud = HUDOverlay(self.config)
 
+        # Persistent memory
+        self.memory = PersistentMemory()
+        self.memory.start_conversation()
+        self._message_count = 0
+
         # Weather effects
         self.weather_particles = []
         self.lightning_flash = 0
@@ -368,6 +374,20 @@ class ChibiAvatarApp:
         self.conversation: list[dict] = []
         self.response_text = ""
         self.is_generating = False
+
+    def _extract_memories(self):
+        """Ask the LLM to extract memorable facts from recent conversation."""
+        try:
+            prompt = self.memory.get_extraction_prompt(self.conversation)
+            result = ""
+            for chunk in self.llm.stream_chat(
+                [{"role": "user", "content": prompt}],
+                extra_system="You are a memory extraction assistant. Return ONLY valid JSON."
+            ):
+                result += chunk
+            self.memory.process_extraction(result)
+        except Exception as e:
+            print(f"[Memory] Extraction failed: {e}")
 
     def _generate_stars(self, count):
         import random
@@ -410,11 +430,15 @@ class ChibiAvatarApp:
     def _generate_response(self):
         """Background thread: stream response from LLM."""
         try:
-            # Inject live data context for this request
+            # Inject live data + memory context
             live_context = self.feeds.get_context()
+            memory_context = self.memory.get_context()
+
             extra_system = ""
+            if memory_context:
+                extra_system += "\n\n" + memory_context
             if live_context:
-                extra_system = (
+                extra_system += (
                     "\n\n--- LIVE DATA (reference naturally, don't dump raw numbers) ---\n"
                     + live_context
                 )
@@ -423,7 +447,6 @@ class ChibiAvatarApp:
             for chunk in self.llm.stream_chat(self.conversation, extra_system=extra_system):
                 full_response += chunk
                 self.response_text = full_response
-                # Switch to speaking as soon as first tokens arrive
                 if self.state == AvatarState.THINKING:
                     self.set_state(AvatarState.SPEAKING)
                     self.bubble.set_text(full_response)
@@ -433,15 +456,24 @@ class ChibiAvatarApp:
             self.conversation.append({"role": "assistant", "content": full_response})
             self.is_generating = False
 
+            # Track interaction
+            self.memory.record_interaction()
+            self._message_count += 1
+
+            # Extract memories every 6 messages (in separate thread, non-blocking)
+            if self._message_count % 6 == 0 and len(self.conversation) >= 4:
+                threading.Thread(target=self._extract_memories, daemon=True).start()
+
             # Speak the response
             if self.voice_out and full_response:
                 self.voice_out.speak(full_response)
 
             # Briefly show happy, then idle
             self.set_state(AvatarState.HAPPY)
-            # Wait for TTS to finish before going idle
+            # Wait for TTS to finish with a hard timeout
             if self.voice_out:
-                while self.voice_out.busy:
+                tts_wait_start = time.time()
+                while self.voice_out.busy and (time.time() - tts_wait_start) < 30:
                     time.sleep(0.1)
                 time.sleep(0.5)
             else:
@@ -450,12 +482,14 @@ class ChibiAvatarApp:
                 self.set_state(AvatarState.IDLE)
 
         except Exception as e:
-            self.response_text = f"[Connection error: {e}]"
+            print(f"[LLM] Error: {e}")
+            self.response_text = f"[Error: {e}]"
             self.bubble.set_text(self.response_text)
             self.is_generating = False
             self.set_state(AvatarState.CONFUSED)
             time.sleep(3.0)
-            self.set_state(AvatarState.IDLE)
+            if not self.is_generating:
+                self.set_state(AvatarState.IDLE)
 
     def update(self, dt):
         self.state_timer += dt
@@ -660,6 +694,11 @@ class ChibiAvatarApp:
             pygame.display.flip()
 
         pygame.quit()
+        # Final memory extraction and save
+        if len(self.conversation) >= 2:
+            print("[Memory] Extracting final memories...")
+            self._extract_memories()
+        self.memory.save()
         # Cleanup
         self.feeds.stop()
         if self.voice_in:

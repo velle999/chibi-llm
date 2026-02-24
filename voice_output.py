@@ -224,11 +224,14 @@ class VoiceOutput:
                 if pygame.mixer.get_init():
                     pygame.mixer.music.load(filepath)
                     pygame.mixer.music.play()
-                    while pygame.mixer.music.get_busy():
+                    # Wait with a hard timeout to prevent infinite loops
+                    play_start = time.time()
+                    while pygame.mixer.music.get_busy() and (time.time() - play_start) < 30:
                         time.sleep(0.05)
+                    pygame.mixer.music.stop()
                     return
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[TTS] Pygame playback error: {e}")
 
         # Fallback to aplay
         try:

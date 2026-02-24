@@ -6,6 +6,7 @@ Supports streaming responses for real-time avatar reactions.
 import json
 import urllib.request
 import urllib.error
+import http.client
 from config import Config
 
 
@@ -20,28 +21,21 @@ class LLMClient:
         return f"http://{self.config.llm_host}:{self.config.llm_port}"
 
     def _check_connection(self):
-        """Quick connectivity check."""
         try:
             url = self.base_url
             if self.config.llm_backend == "ollama":
                 url += "/api/tags"
             else:
                 url += "/health"
-
             req = urllib.request.Request(url, method="GET")
             req.add_header("Connection", "close")
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 self.connected = resp.status == 200
         except Exception:
             self.connected = False
 
     def stream_chat(self, messages: list[dict], extra_system: str = ""):
-        """
-        Generator that yields text chunks from the LLM.
-        Works with both Ollama and llama.cpp server APIs.
-        extra_system: additional context appended to the system prompt.
-        """
-        # Trim conversation history
+        """Generator that yields text chunks from the LLM."""
         max_msgs = self.config.max_conversation_history
         if len(messages) > max_msgs:
             messages = messages[-max_msgs:]
@@ -52,10 +46,9 @@ class LLMClient:
             yield from self._stream_llamacpp(messages, extra_system)
 
     def _stream_ollama(self, messages: list[dict], extra_system: str = ""):
-        """Stream from Ollama /api/chat endpoint."""
+        """Stream from Ollama /api/chat — line-buffered for reliability."""
         url = f"{self.base_url}/api/chat"
 
-        # Prepend system message with live data context
         system_prompt = self.config.llm_system_prompt + extra_system
         full_messages = [
             {"role": "system", "content": system_prompt}
@@ -70,48 +63,51 @@ class LLMClient:
         req = urllib.request.Request(url, data=payload, method="POST")
         req.add_header("Content-Type", "application/json")
 
+        resp = None
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                self.connected = True
-                buffer = b""
-                while True:
-                    chunk = resp.read(1)
-                    if not chunk:
-                        break
-                    buffer += chunk
-                    if chunk == b"\n":
-                        line = buffer.strip()
-                        buffer = b""
-                        if line:
-                            try:
-                                data = json.loads(line)
-                                if "message" in data and "content" in data["message"]:
-                                    text = data["message"]["content"]
-                                    if text:
-                                        yield text
-                                if data.get("done", False):
-                                    break
-                            except json.JSONDecodeError:
-                                continue
+            resp = urllib.request.urlopen(req, timeout=120)
+            self.connected = True
+
+            # Iterate lines — much more reliable than byte-by-byte
+            for raw_line in resp:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    if "message" in data and "content" in data["message"]:
+                        text = data["message"]["content"]
+                        if text:
+                            yield text
+                    if data.get("done", False):
+                        return
+                except json.JSONDecodeError:
+                    continue
 
         except urllib.error.URLError as e:
             self.connected = False
             raise ConnectionError(f"Cannot reach Ollama at {url}: {e}")
+        except (http.client.RemoteDisconnected, ConnectionResetError) as e:
+            self.connected = False
+            raise ConnectionError(f"Connection lost: {e}")
         except Exception as e:
             self.connected = False
             raise
+        finally:
+            if resp:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
 
     def _stream_llamacpp(self, messages: list[dict], extra_system: str = ""):
         """Stream from llama.cpp /completion endpoint."""
         url = f"{self.base_url}/completion"
 
-        # Build prompt from messages (ChatML format)
         system_prompt = self.config.llm_system_prompt + extra_system
         prompt = f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
         for msg in messages:
-            role = msg["role"]
-            content = msg["content"]
-            prompt += f"<|im_start|>{role}\n{content}<|im_end|>\n"
+            prompt += f"<|im_start|>{msg['role']}\n{msg['content']}<|im_end|>\n"
         prompt += "<|im_start|>assistant\n"
 
         payload = json.dumps({
@@ -125,28 +121,28 @@ class LLMClient:
         req = urllib.request.Request(url, data=payload, method="POST")
         req.add_header("Content-Type", "application/json")
 
+        resp = None
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                self.connected = True
-                buffer = b""
-                for byte in iter(lambda: resp.read(1), b""):
-                    buffer += byte
-                    if byte == b"\n":
-                        line = buffer.strip()
-                        buffer = b""
-                        if line.startswith(b"data: "):
-                            json_str = line[6:]
-                            if json_str == b"[DONE]":
-                                break
-                            try:
-                                data = json.loads(json_str)
-                                text = data.get("content", "")
-                                if text:
-                                    yield text
-                                if data.get("stop", False):
-                                    break
-                            except json.JSONDecodeError:
-                                continue
+            resp = urllib.request.urlopen(req, timeout=120)
+            self.connected = True
+
+            for raw_line in resp:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if line.startswith(b"data: "):
+                    json_str = line[6:]
+                    if json_str == b"[DONE]":
+                        return
+                    try:
+                        data = json.loads(json_str)
+                        text = data.get("content", "")
+                        if text:
+                            yield text
+                        if data.get("stop", False):
+                            return
+                    except json.JSONDecodeError:
+                        continue
 
         except urllib.error.URLError as e:
             self.connected = False
@@ -154,3 +150,9 @@ class LLMClient:
         except Exception as e:
             self.connected = False
             raise
+        finally:
+            if resp:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
