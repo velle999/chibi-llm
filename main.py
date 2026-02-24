@@ -246,9 +246,11 @@ class StatusBar:
         self.config = config
         self.status = "Disconnected"
         self.font = None
+        self.clock_font = None
 
     def init_font(self):
         self.font = pygame.font.SysFont("monospace", 14)
+        self.clock_font = pygame.font.SysFont("monospace", 22, bold=True)
 
     def draw(self, surface, state: AvatarState, connected: bool,
              voice_in=None, voice_out=None):
@@ -256,12 +258,24 @@ class StatusBar:
             self.init_font()
 
         w = surface.get_width()
+        from datetime import datetime
+        now = datetime.now()
 
-        # Status dot
+        # Clock (top-left, prominent)
+        time_str = now.strftime("%I:%M %p")
+        clock_surf = self.clock_font.render(time_str, True, self.config.neon_primary)
+        surface.blit(clock_surf, (12, 6))
+
+        # Date under clock
+        date_str = now.strftime("%a %b %d")
+        date_surf = self.font.render(date_str, True, (80, 100, 120))
+        surface.blit(date_surf, (14, 30))
+
+        # Connection status dot (next to date)
         dot_color = (0, 255, 100) if connected else (255, 60, 60)
         status_text = f"● {state.name}"
         text_surf = self.font.render(status_text, True, dot_color)
-        surface.blit(text_surf, (12, 8))
+        surface.blit(text_surf, (14, 46))
 
         # Voice indicators (center)
         voice_parts = []
@@ -282,14 +296,14 @@ class StatusBar:
             surface.blit(vs, (x_offset, 8))
             x_offset += vs.get_width() + 16
 
-        # Server info
+        # Server info (top-right, below weather panel area)
         server_text = f"{self.config.llm_host}:{self.config.llm_port}"
-        server_surf = self.font.render(server_text, True, (60, 60, 80))
+        server_surf = self.font.render(server_text, True, (40, 45, 55))
         surface.blit(server_surf, (w - server_surf.get_width() - 12, 8))
 
         # Controls hint
-        hint = self.font.render("[F1] mic toggle  [ESC] quit", True, (40, 40, 60))
-        surface.blit(hint, (12, surface.get_height() - 20))
+        hint = self.font.render("[F1] mic  [ESC] quit", True, (35, 35, 50))
+        surface.blit(hint, (12, surface.get_height() - 18))
 
 # ─── Main App ────────────────────────────────────────────────────────────────
 

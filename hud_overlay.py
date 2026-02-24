@@ -212,7 +212,7 @@ class MarketTicker_Overlay:
 
         # Draw bar background
         bar_h = 26
-        bar_y = surface.get_height() - 64  # above the input box
+        bar_y = surface.get_height() - 92  # above the input box
         bar_surf = pygame.Surface((w, bar_h), pygame.SRCALPHA)
         pygame.draw.rect(bar_surf, (5, 5, 18, 200), (0, 0, w, bar_h))
         # Top border line
@@ -247,7 +247,7 @@ class MarketMiniPanel:
 
         pad = 10
         bx = pad
-        by = 26
+        by = 64  # below clock area
         line_h = 14
         lines = []
 

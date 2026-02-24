@@ -11,11 +11,11 @@ class Config:
     # ── Window ───────────────────────────────────────────────────────────
     window_width: int = 800
     window_height: int = 480      # Common Pi touchscreen resolution
-    fullscreen: bool = False       # Set True for kiosk mode on Pi
+    fullscreen: bool = True        # Kiosk mode for Pi
     target_fps: int = 30           # 30 is fine for Pi 4
 
     # ── LLM Server (your PC) ────────────────────────────────────────────
-    llm_host: str = "192.168.40.153"   # ← Change to your PC's IP
+    llm_host: str = "192.168.40.153"  # Your PC's IP
     llm_port: int = 11434              # Ollama default
     llm_model: str = "mistral"         # Model name in Ollama
     llm_backend: str = "ollama"        # "ollama" or "llamacpp"
