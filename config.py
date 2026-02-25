@@ -63,8 +63,10 @@ class Config:
     # ── Voice ────────────────────────────────────────────────────────────
     voice_enabled: bool = True
     stt_model: str = "tiny"             # Whisper model: "tiny", "base", "small"
-    tts_voice: str = "en_US-lessac-medium"  # Piper voice name
-    tts_speed: float = 1.0              # Speech rate (1.0 = normal)
+    tts_voice: str = "en_GB-cori-medium"  # Bright British female — sounds cute
+    tts_speed: float = 1.1              # Slightly faster = perkier
+    tts_pitch_semitones: int = 2        # Shift up 2 semitones for extra cute
+                                        # (requires sox: sudo apt install sox libsox-fmt-all)
 
     # ── Weather ──────────────────────────────────────────────────────────
     weather_enabled: bool = True

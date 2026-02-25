@@ -1,16 +1,30 @@
 """
-Voice Output — Text-to-speech using Piper TTS.
-Runs locally on Pi 4, lightweight and fast.
+Voice Output — Cute TTS for Chibi using Piper.
 
-Install:
+Piper voices that sound good for a kawaii character:
+  - en_US-lessac-medium   (warm female, good default)
+  - en_GB-cori-medium     (bright British female, cute)
+  - en_US-amy-medium      (clear, slightly higher pitch)
+  - en_GB-aru-medium      (gentle British female, multi-speaker)
+
+The trick for a "cute" voice: use a naturally higher-pitched voice
+and optionally speed it up slightly + pitch shift with sox/ffmpeg.
+
+Setup on Pi:
     pip install piper-tts --break-system-packages
-
-    OR install the standalone binary:
+    # OR download binary:
+    mkdir -p ~/piper && cd ~/piper
     wget https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz
     tar xzf piper_linux_aarch64.tar.gz
 
-Voice models download automatically on first use, or manually:
-    https://huggingface.co/rhasspy/piper-voices/tree/main
+    # Download a voice model:
+    mkdir -p ~/.local/share/piper-voices
+    cd ~/.local/share/piper-voices
+    wget https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/cori/medium/en_GB-cori-medium.onnx
+    wget https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/cori/medium/en_GB-cori-medium.onnx.json
+
+    # Optional for pitch shifting:
+    sudo apt install sox libsox-fmt-all
 """
 
 import subprocess
@@ -18,86 +32,123 @@ import threading
 import queue
 import time
 import os
-import wave
-import io
 import tempfile
 
-# Try to use pygame.mixer for audio playback (already initialized by main app)
-USE_PYGAME_AUDIO = True
+# Prefer aplay over pygame.mixer — more reliable on Pi
+USE_APLAY = True
 
 
 class VoiceOutput:
-    def __init__(self, voice="en_US-lessac-medium", speed=1.0):
+    def __init__(self, voice="en_GB-cori-medium", speed=1.0, pitch_semitones=0):
         """
-        voice: Piper voice name. Good options for Pi:
-            - "en_US-lessac-medium"   (natural, good quality)
-            - "en_US-amy-medium"      (British-ish, clear)
-            - "en_US-danny-low"       (fast, lower quality)
-            - "en_GB-cori-medium"     (British female)
-        speed: Speech rate multiplier (1.0 = normal)
+        voice: Piper voice name or path to .onnx file
+        speed: Speech rate via length_scale (< 1.0 = faster, > 1.0 = slower)
+               Note: Piper length_scale is inverted — lower = faster
+        pitch_semitones: Shift pitch up/down with sox (0 = no shift, 2-3 = cuter)
         """
         self.voice = voice
         self.speed = speed
+        self.pitch_semitones = pitch_semitones
         self.speak_queue = queue.Queue()
         self.is_speaking = False
         self._running = True
-        self._piper_available = False
-        self._use_piper_cli = False
+        self._piper_cmd = None
+        self._voice_path = None
+        self._sox_available = False
 
-        # Check what's available
-        self._check_piper()
+        self._find_piper()
+        self._find_voice()
+        self._check_sox()
 
-        # Start speech worker thread
+        # Start speech worker
         self._worker = threading.Thread(target=self._speak_worker, daemon=True)
         self._worker.start()
 
-    def _check_piper(self):
-        """Check if Piper is available (Python package or CLI)."""
-        # Try Python package first
+    def _find_piper(self):
+        """Find the piper binary."""
+        # Check pip-installed piper
         try:
-            import piper
-            self._piper_available = True
-            self._use_piper_cli = False
-            print("[TTS] Piper Python package found!")
-            return
-        except ImportError:
-            pass
-
-        # Try CLI binary
-        try:
-            result = subprocess.run(
-                ["piper", "--help"],
-                capture_output=True, timeout=5
-            )
+            result = subprocess.run(["piper", "--version"], capture_output=True, timeout=5)
             if result.returncode == 0:
-                self._piper_available = True
-                self._use_piper_cli = True
-                print("[TTS] Piper CLI binary found!")
+                self._piper_cmd = "piper"
+                print("[TTS] Found piper (pip install)")
                 return
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
-        # Try local binary
-        local_piper = os.path.expanduser("~/piper/piper")
-        if os.path.exists(local_piper):
-            self._piper_available = True
-            self._use_piper_cli = True
-            print(f"[TTS] Found local Piper at {local_piper}")
+        # Check local binary
+        local = os.path.expanduser("~/piper/piper")
+        if os.path.exists(local):
+            self._piper_cmd = local
+            print(f"[TTS] Found piper at {local}")
             return
 
-        print("[TTS] Piper not found! Install with:")
-        print("[TTS]   pip install piper-tts --break-system-packages")
-        print("[TTS]   OR download binary from github.com/rhasspy/piper/releases")
-        print("[TTS] Falling back to espeak (if available)")
+        # Check python module
+        try:
+            import piper
+            self._piper_cmd = "__python__"
+            print("[TTS] Found piper Python module")
+            return
+        except ImportError:
+            pass
+
+        print("[TTS] ⚠ Piper not found! Voice will fall back to espeak.")
+        print("[TTS] Install: pip install piper-tts --break-system-packages")
+
+    def _find_voice(self):
+        """Find the voice model file."""
+        if self._piper_cmd == "__python__":
+            # Python module handles voice download itself
+            self._voice_path = self.voice
+            return
+
+        voice_dirs = [
+            os.path.expanduser("~/.local/share/piper-voices"),
+            os.path.expanduser("~/piper-voices"),
+            "/usr/share/piper-voices",
+        ]
+
+        # Check if voice is already a full path
+        if os.path.exists(self.voice):
+            self._voice_path = self.voice
+            print(f"[TTS] Voice model: {self.voice}")
+            return
+
+        # Search for .onnx file matching voice name
+        for d in voice_dirs:
+            candidate = os.path.join(d, f"{self.voice}.onnx")
+            if os.path.exists(candidate):
+                self._voice_path = candidate
+                print(f"[TTS] Voice model: {candidate}")
+                return
+
+        # Not found — piper can auto-download some voices
+        self._voice_path = self.voice
+        print(f"[TTS] Voice '{self.voice}' not found locally, piper may download it")
+
+    def _check_sox(self):
+        """Check if sox is available for pitch shifting."""
+        try:
+            result = subprocess.run(["sox", "--version"], capture_output=True, timeout=3)
+            self._sox_available = result.returncode == 0
+            if self._sox_available:
+                print(f"[TTS] Sox available — pitch shift: {self.pitch_semitones} semitones")
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            self._sox_available = False
 
     def speak(self, text: str):
         """Queue text for speech. Non-blocking."""
         if text and text.strip():
-            self.speak_queue.put(text.strip())
+            # Clean text for TTS — strip special chars that confuse piper
+            clean = text.strip()
+            clean = clean.replace('"', '').replace("'", "'")
+            clean = clean.replace(':3', '').replace('^_^', '')
+            clean = clean.replace('>w<', '').replace('~', '')
+            if clean:
+                self.speak_queue.put(clean)
 
     def speak_now(self, text: str):
         """Clear queue and speak immediately."""
-        # Clear pending items
         while not self.speak_queue.empty():
             try:
                 self.speak_queue.get_nowait()
@@ -106,144 +157,197 @@ class VoiceOutput:
         self.speak(text)
 
     def stop(self):
-        """Stop current speech."""
-        # Clear queue
+        """Stop and clear queue."""
         while not self.speak_queue.empty():
             try:
                 self.speak_queue.get_nowait()
             except queue.Empty:
                 break
-        # TODO: interrupt current playback
 
     @property
     def busy(self) -> bool:
         return self.is_speaking or not self.speak_queue.empty()
 
     def _speak_worker(self):
-        """Background thread that processes speech queue."""
+        """Background thread processing speech queue."""
         while self._running:
             try:
                 text = self.speak_queue.get(timeout=0.5)
                 self.is_speaking = True
-
-                if self._piper_available:
-                    if self._use_piper_cli:
-                        self._speak_piper_cli(text)
-                    else:
-                        self._speak_piper_python(text)
-                else:
-                    self._speak_espeak(text)
-
+                self._synthesize_and_play(text)
                 self.is_speaking = False
-
             except queue.Empty:
                 continue
             except Exception as e:
-                print(f"[TTS] Speech error: {e}")
+                print(f"[TTS] Error: {e}")
                 self.is_speaking = False
 
-    def _speak_piper_python(self, text: str):
-        """Synthesize and play using Piper Python package."""
-        try:
-            import piper
-            import struct
-
-            # Create synthesizer (cached after first call)
-            if not hasattr(self, '_synth'):
-                self._synth = piper.PiperVoice.load(
-                    self.voice,
-                    use_cuda=False,
-                )
-
-            # Synthesize to WAV in memory
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                temp_path = f.name
-                with wave.open(f, "wb") as wav:
-                    self._synth.synthesize(text, wav)
-
-            # Play with pygame
-            self._play_wav(temp_path)
-
-            # Cleanup
-            os.unlink(temp_path)
-
-        except Exception as e:
-            print(f"[TTS] Piper Python error: {e}")
+    def _synthesize_and_play(self, text: str):
+        """Synthesize text to WAV and play it."""
+        if self._piper_cmd == "__python__":
+            self._speak_piper_python(text)
+        elif self._piper_cmd:
+            self._speak_piper_cli(text)
+        else:
             self._speak_espeak(text)
 
     def _speak_piper_cli(self, text: str):
-        """Synthesize and play using Piper CLI binary."""
+        """Synthesize with Piper CLI, optionally pitch-shift with sox."""
         try:
-            # Find piper binary
-            piper_bin = "piper"
-            local_piper = os.path.expanduser("~/piper/piper")
-            if os.path.exists(local_piper):
-                piper_bin = local_piper
-
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                temp_path = f.name
+                raw_path = f.name
 
-            # Piper CLI: echo text | piper --model voice --output_file out.wav
+            # Piper synthesis
+            # length_scale: lower = faster. 0.9 = slightly faster & perkier
+            length_scale = 1.0 / self.speed if self.speed > 0 else 1.0
+
             proc = subprocess.run(
-                [piper_bin, "--model", self.voice,
-                 "--output_file", temp_path,
-                 "--length_scale", str(1.0 / self.speed)],
+                [self._piper_cmd,
+                 "--model", self._voice_path,
+                 "--output_file", raw_path,
+                 "--length_scale", str(length_scale),
+                 "--sentence_silence", "0.15"],
                 input=text.encode("utf-8"),
                 capture_output=True,
                 timeout=30,
             )
 
-            if proc.returncode == 0 and os.path.exists(temp_path):
-                self._play_wav(temp_path)
+            if proc.returncode != 0:
+                stderr = proc.stderr.decode(errors='replace')
+                print(f"[TTS] Piper error: {stderr[:200]}")
+                self._speak_espeak(text)
+                return
 
-            os.unlink(temp_path)
+            play_path = raw_path
 
+            # Pitch shift with sox if available and requested
+            if self._sox_available and self.pitch_semitones != 0:
+                shifted_path = raw_path + ".shifted.wav"
+                try:
+                    subprocess.run(
+                        ["sox", raw_path, shifted_path,
+                         "pitch", str(self.pitch_semitones * 100),
+                         "rate", "22050"],
+                        capture_output=True, timeout=10,
+                    )
+                    if os.path.exists(shifted_path) and os.path.getsize(shifted_path) > 100:
+                        play_path = shifted_path
+                except Exception as e:
+                    print(f"[TTS] Sox pitch error: {e}")
+
+            # Play
+            self._play_wav(play_path)
+
+            # Cleanup
+            for p in [raw_path, raw_path + ".shifted.wav"]:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+        except subprocess.TimeoutExpired:
+            print("[TTS] Piper timed out")
         except Exception as e:
             print(f"[TTS] Piper CLI error: {e}")
             self._speak_espeak(text)
 
-    def _speak_espeak(self, text: str):
-        """Fallback: use espeak (pre-installed on most Pi OS)."""
+    def _speak_piper_python(self, text: str):
+        """Synthesize with Piper Python module."""
         try:
-            speed = int(150 * self.speed)
+            import piper
+            import wave
+
+            if not hasattr(self, '_synth'):
+                self._synth = piper.PiperVoice.load(self._voice_path, use_cuda=False)
+
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                temp_path = f.name
+                with wave.open(f, "wb") as wav:
+                    self._synth.synthesize(text, wav,
+                                           length_scale=1.0 / self.speed if self.speed > 0 else 1.0)
+
+            play_path = temp_path
+
+            # Pitch shift
+            if self._sox_available and self.pitch_semitones != 0:
+                shifted = temp_path + ".shifted.wav"
+                try:
+                    subprocess.run(
+                        ["sox", temp_path, shifted,
+                         "pitch", str(self.pitch_semitones * 100),
+                         "rate", "22050"],
+                        capture_output=True, timeout=10,
+                    )
+                    if os.path.exists(shifted) and os.path.getsize(shifted) > 100:
+                        play_path = shifted
+                except Exception:
+                    pass
+
+            self._play_wav(play_path)
+
+            for p in [temp_path, temp_path + ".shifted.wav"]:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+        except Exception as e:
+            print(f"[TTS] Piper Python error: {e}")
+            self._speak_espeak(text)
+
+    def _speak_espeak(self, text: str):
+        """Fallback — espeak with higher pitch to sound cuter."""
+        try:
             subprocess.run(
-                ["espeak", "-s", str(speed), "-v", "en", text],
+                ["espeak",
+                 "-s", "160",    # speed (words per minute)
+                 "-p", "80",     # pitch (0-99, higher = cuter)
+                 "-v", "en+f3",  # female voice variant 3
+                 text],
                 capture_output=True,
                 timeout=30,
             )
         except FileNotFoundError:
-            print("[TTS] espeak not found either! No TTS available.")
+            print("[TTS] espeak not found! No TTS available.")
+        except subprocess.TimeoutExpired:
+            print("[TTS] espeak timed out")
         except Exception as e:
             print(f"[TTS] espeak error: {e}")
 
     def _play_wav(self, filepath: str):
-        """Play a WAV file using pygame.mixer or aplay."""
-        if USE_PYGAME_AUDIO:
-            try:
-                import pygame
-                if pygame.mixer.get_init():
-                    pygame.mixer.music.load(filepath)
-                    pygame.mixer.music.play()
-                    # Wait with a hard timeout to prevent infinite loops
-                    play_start = time.time()
-                    while pygame.mixer.music.get_busy() and (time.time() - play_start) < 30:
-                        time.sleep(0.05)
-                    pygame.mixer.music.stop()
-                    return
-            except Exception as e:
-                print(f"[TTS] Pygame playback error: {e}")
+        """Play a WAV file — prefer aplay on Pi, with hard timeout."""
+        if not os.path.exists(filepath):
+            return
 
-        # Fallback to aplay
+        if USE_APLAY:
+            try:
+                subprocess.run(
+                    ["aplay", "-q", filepath],
+                    capture_output=True,
+                    timeout=30,
+                )
+                return
+            except FileNotFoundError:
+                pass  # Fall through to pygame
+            except subprocess.TimeoutExpired:
+                print("[TTS] aplay timed out")
+                return
+            except Exception as e:
+                print(f"[TTS] aplay error: {e}")
+
+        # Fallback: pygame.mixer
         try:
-            subprocess.run(
-                ["aplay", "-q", filepath],
-                capture_output=True,
-                timeout=30,
-            )
+            import pygame
+            if pygame.mixer.get_init():
+                pygame.mixer.music.load(filepath)
+                pygame.mixer.music.play()
+                start = time.time()
+                while pygame.mixer.music.get_busy() and (time.time() - start) < 30:
+                    time.sleep(0.05)
+                pygame.mixer.music.stop()
         except Exception as e:
-            print(f"[TTS] Playback error: {e}")
+            print(f"[TTS] pygame playback error: {e}")
 
     def cleanup(self):
-        """Clean up resources."""
         self._running = False
         self.stop()

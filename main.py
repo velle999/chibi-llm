@@ -346,6 +346,7 @@ class ChibiAvatarApp:
             self.voice_out = VoiceOutput(
                 voice=self.config.tts_voice,
                 speed=self.config.tts_speed,
+                pitch_semitones=self.config.tts_pitch_semitones,
             )
             self.voice_in = VoiceInput(
                 model_size=self.config.stt_model,
