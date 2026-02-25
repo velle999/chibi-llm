@@ -22,6 +22,7 @@ from voice_output import VoiceOutput
 from data_feeds import DataFeedManager
 from hud_overlay import HUDOverlay
 from memory import PersistentMemory
+from vision import Vision, is_vision_request
 from config import Config
 
 # ─── Avatar States ───────────────────────────────────────────────────────────
@@ -366,6 +367,15 @@ class ChibiAvatarApp:
         self.memory.start_conversation()
         self._message_count = 0
 
+        # Vision
+        self.vision = None
+        if self.config.vision_enabled:
+            self.vision = Vision(self.config)
+            if self.vision.available:
+                self.vision.start_awareness()
+            else:
+                self.vision = None
+
         # Weather effects
         self.weather_particles = []
         self.lightning_flash = 0
@@ -424,10 +434,17 @@ class ChibiAvatarApp:
         self.response_text = ""
         self.last_interaction = time.time()
 
-        thread = threading.Thread(target=self._generate_response, daemon=True)
+        # Check if this is a vision request
+        vision_request = self.vision and is_vision_request(text)
+
+        thread = threading.Thread(
+            target=self._generate_response,
+            args=(vision_request,),
+            daemon=True,
+        )
         thread.start()
 
-    def _generate_response(self):
+    def _generate_response(self, vision_request=False):
         """Background thread: stream response from LLM."""
         try:
             # Inject live data + memory context
@@ -437,6 +454,23 @@ class ChibiAvatarApp:
             extra_system = ""
             if memory_context:
                 extra_system += "\n\n" + memory_context
+
+            # Vision: if requested, capture and describe the scene
+            if vision_request and self.vision:
+                scene_desc = self.vision.describe_scene()
+                if scene_desc:
+                    extra_system += (
+                        f"\n\n[VISION — what you currently see through your camera]\n"
+                        f"{scene_desc}\n"
+                        f"Use this to answer Velle's question about what you see."
+                    )
+            elif self.vision and self.vision.last_description:
+                # Passive awareness — background scene context
+                extra_system += (
+                    f"\n\n[BACKGROUND SCENE — do NOT mention unless relevant]\n"
+                    f"Camera sees: {self.vision.last_description}"
+                )
+
             if live_context:
                 extra_system += (
                     "\n\n--- BACKGROUND REFERENCE DATA (DO NOT mention unless asked) ---\n"
@@ -709,6 +743,39 @@ class ChibiAvatarApp:
                 t, dt,
             )
 
+            # Camera PiP thumbnail (bottom-right corner)
+            if self.vision and self.config.vision_pip:
+                frame_bytes = self.vision.get_frame_for_display()
+                if frame_bytes:
+                    try:
+                        import cv2
+                        import numpy as np
+                        nparr = np.frombuffer(frame_bytes, np.uint8)
+                        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        if img is not None:
+                            # Resize for PiP
+                            pip_w, pip_h = 120, 90
+                            img = cv2.resize(img, (pip_w, pip_h))
+                            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                            pip_surf = pygame.image.frombuffer(
+                                img.tobytes(), (pip_w, pip_h), 'RGB'
+                            )
+                            # Position: bottom-right, above input box
+                            px = self.config.window_width - pip_w - 12
+                            py = self.config.window_height - pip_h - 100
+                            # Border
+                            border_rect = pygame.Rect(px - 2, py - 2, pip_w + 4, pip_h + 4)
+                            pygame.draw.rect(self.screen, self.config.neon_primary,
+                                             border_rect, 1, border_radius=4)
+                            self.screen.blit(pip_surf, (px, py))
+                            # Label
+                            if not hasattr(self, '_pip_font'):
+                                self._pip_font = pygame.font.SysFont("monospace", 10)
+                            cam_label = self._pip_font.render("CAM", True, self.config.neon_primary)
+                            self.screen.blit(cam_label, (px + 2, py + 2))
+                    except Exception:
+                        pass  # Silent fail — PiP is optional eye candy
+
             # UI
             self.status_bar.draw(self.screen, self.state, self.llm.connected,
                                  self.voice_in, self.voice_out)
@@ -724,6 +791,8 @@ class ChibiAvatarApp:
         self.memory.save()
         # Cleanup
         self.feeds.stop()
+        if self.vision:
+            self.vision.stop()
         if self.voice_in:
             self.voice_in.cleanup()
         if self.voice_out:

@@ -88,3 +88,16 @@ class Config:
     ])
     market_interval: int = 300          # Fetch every 5 minutes
     ticker_scroll_speed: float = 60.0   # Pixels per second
+
+    # ── Vision (PS3 Eye Webcam) ──────────────────────────────────────────
+    vision_enabled: bool = True
+    camera_device: int = 0               # /dev/video0 — change if needed
+    camera_width: int = 320              # 320x240 is fine for LLM vision
+    camera_height: int = 240
+    camera_fps: int = 30
+    vision_model: str = "moondream"      # Multimodal model in Ollama
+    vision_resize_width: int = 320       # Resize before sending to LLM
+    vision_jpeg_quality: int = 70        # JPEG quality (lower = smaller/faster)
+    vision_awareness_interval: int = 60  # Passive scene check every N seconds
+    vision_motion_threshold: float = 0.05  # % of pixels changed for motion
+    vision_pip: bool = True              # Show camera thumbnail on screen
