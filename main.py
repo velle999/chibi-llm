@@ -23,6 +23,7 @@ from data_feeds import DataFeedManager
 from hud_overlay import HUDOverlay
 from memory import PersistentMemory
 from vision import Vision, is_vision_request
+from alarm import AlarmManager, is_alarm_request, is_dismiss_word, is_snooze_word, parse_alarm_time
 from config import Config
 
 # ─── Avatar States ───────────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ class AvatarState(Enum):
     HAPPY = auto()
     CONFUSED = auto()
     SLEEPING = auto()
+    ALARM = auto()
 
 # ─── Particle System ────────────────────────────────────────────────────────
 
@@ -381,6 +383,10 @@ class ChibiAvatarApp:
         self.weather_particles = []
         self.lightning_flash = 0
 
+        # Alarm
+        self.alarm = AlarmManager(self.config)
+        self._alarm_speak_timer = 0
+
         # Conversation
         self.conversation: list[dict] = []
         self.response_text = ""
@@ -428,6 +434,68 @@ class ChibiAvatarApp:
 
     def send_message(self, text: str):
         """Send a message to the LLM in a background thread."""
+        # ── Alarm dismiss/snooze while ringing ───────────────────────────
+        if self.alarm.is_ringing:
+            if is_snooze_word(text):
+                self.alarm.snooze(5)
+                self.bubble.set_text("Okay, 5 more minutes... zzz")
+                if self.voice_out:
+                    self.voice_out.speak_now("Okay, 5 more minutes.")
+                self.set_state(AvatarState.SLEEPING)
+                return
+            elif is_dismiss_word(text) or True:
+                # ANY voice input while ringing = dismiss
+                self.alarm.dismiss()
+                self.bubble.set_text("Good morning Velle! Have a great day! :3")
+                if self.voice_out:
+                    self.voice_out.speak_now("Good morning Velle! Have a great day!")
+                self.set_state(AvatarState.HAPPY)
+                self.last_interaction = time.time()
+                time.sleep(2)
+                self.set_state(AvatarState.IDLE)
+                return
+
+        # ── Alarm commands ────────────────────────────────────────────────
+        alarm_action = is_alarm_request(text)
+        if alarm_action == "set":
+            target = parse_alarm_time(text)
+            if target:
+                alarm = self.alarm.add_alarm(target)
+                reply = f"Alarm set for {alarm.time_str}! I'll wake you up :3"
+                self.bubble.set_text(reply)
+                if self.voice_out:
+                    self.voice_out.speak(reply)
+                self.set_state(AvatarState.HAPPY)
+                self.last_interaction = time.time()
+                return
+            # Couldn't parse — fall through to LLM
+
+        elif alarm_action == "cancel":
+            removed = self.alarm.cancel_next()
+            if removed:
+                reply = f"Canceled alarm for {removed.time_str}."
+            else:
+                reply = "No alarms to cancel!"
+            self.bubble.set_text(reply)
+            if self.voice_out:
+                self.voice_out.speak(reply)
+            self.last_interaction = time.time()
+            return
+
+        elif alarm_action == "list":
+            alarms = self.alarm.list_alarms()
+            if alarms:
+                times = ", ".join(a.time_str for a in alarms)
+                reply = f"Your alarms: {times}"
+            else:
+                reply = "No alarms set!"
+            self.bubble.set_text(reply)
+            if self.voice_out:
+                self.voice_out.speak(reply)
+            self.last_interaction = time.time()
+            return
+
+        # ── Normal message ────────────────────────────────────────────────
         self.conversation.append({"role": "user", "content": text})
         self.set_state(AvatarState.THINKING)
         self.bubble.hide()
@@ -544,8 +612,70 @@ class ChibiAvatarApp:
     def update(self, dt):
         self.state_timer += dt
 
+        # ── Alarm ringing check ──────────────────────────────────────────
+        if self.alarm.is_ringing and self.state != AvatarState.ALARM:
+            self.set_state(AvatarState.ALARM)
+            self._alarm_speak_timer = 0
+            # Start mic so we can hear dismiss commands
+            if self.voice_in and not self.voice_in.is_listening:
+                self.voice_in.start_listening()
+
+        if self.state == AvatarState.ALARM:
+            if not self.alarm.is_ringing:
+                # Alarm was dismissed
+                self.set_state(AvatarState.IDLE)
+            else:
+                # Speak wake message every N seconds
+                self._alarm_speak_timer += dt
+                interval = self.config.alarm_speak_interval
+                if self._alarm_speak_timer >= interval:
+                    self._alarm_speak_timer = 0
+                    msg = self.alarm.get_next_wake_message()
+                    self.bubble.set_text(msg)
+
+                    # Pause mic, speak, resume mic
+                    if self.voice_in and self.voice_in.is_listening:
+                        self.voice_in.stop_listening()
+                    if self.voice_out:
+                        self.voice_out.speak_now(msg)
+                        # Wait for speech to finish
+                        wait_start = time.time()
+                        # Non-blocking-ish: don't freeze the main loop too long
+                        # The actual wait happens over multiple update cycles
+                    # Resume mic after a short delay (handled below)
+
+                # Check voice for dismiss (only when not speaking)
+                is_speaking = self.voice_out and self.voice_out.is_speaking if self.voice_out else False
+                if not is_speaking:
+                    if self.voice_in and not self.voice_in.is_listening:
+                        # Drain stale then restart
+                        while self.voice_in.get_transcription() is not None:
+                            pass
+                        self.voice_in.start_listening()
+
+                    if self.voice_in:
+                        transcription = self.voice_in.get_transcription()
+                        if transcription:
+                            if is_snooze_word(transcription):
+                                self.alarm.snooze(5)
+                                self.bubble.set_text("5 more minutes... zzz")
+                                if self.voice_out:
+                                    self.voice_out.speak_now("Okay, 5 more minutes.")
+                                self.set_state(AvatarState.SLEEPING)
+                            else:
+                                # Any voice input = dismiss
+                                self.alarm.dismiss()
+                                self.bubble.set_text("Good morning Velle! :3")
+                                if self.voice_out:
+                                    self.voice_out.speak_now("Good morning Velle! Have a great day!")
+                                self.set_state(AvatarState.HAPPY)
+                                self.last_interaction = time.time()
+
+                # Don't process normal mic/sleep logic during alarm
+                return
+
+        # ── Normal update logic ──────────────────────────────────────────
         # Poll voice input — BUT only when we're not speaking or generating
-        # This prevents the mic from picking up espeak/piper output (feedback loop)
         is_speaking = self.voice_out and self.voice_out.is_speaking if self.voice_out else False
         mic_safe = not self.is_generating and not is_speaking
 
@@ -710,6 +840,14 @@ class ChibiAvatarApp:
                                 self.voice_in.stop_listening()
                             else:
                                 self.voice_in.start_listening()
+                    elif self.state == AvatarState.ALARM:
+                        # Any keypress dismisses alarm
+                        self.alarm.dismiss()
+                        self.bubble.set_text("Good morning Velle! :3")
+                        if self.voice_out:
+                            self.voice_out.speak_now("Good morning Velle!")
+                        self.set_state(AvatarState.HAPPY)
+                        self.last_interaction = time.time()
 
                 submitted = self.input_box.handle_event(event)
                 if submitted and not self.is_generating:
@@ -731,6 +869,49 @@ class ChibiAvatarApp:
 
             # Chat bubble
             self.bubble.draw(self.screen, cx, cy - 100)
+
+            # ── Alarm visual overlay ─────────────────────────────────────
+            if self.state == AvatarState.ALARM:
+                # Pulsing screen border
+                pulse = abs(math.sin(t * 4))
+                border_alpha = int(100 + 155 * pulse)
+                border_color = (255, 200, 50)  # Warm amber
+
+                border_surf = pygame.Surface(
+                    (self.config.window_width, self.config.window_height), pygame.SRCALPHA
+                )
+                # Thick pulsing border
+                bw = int(4 + pulse * 4)
+                pygame.draw.rect(border_surf, (*border_color, border_alpha),
+                                 (0, 0, self.config.window_width, self.config.window_height),
+                                 width=bw, border_radius=4)
+                self.screen.blit(border_surf, (0, 0))
+
+                # Alarm text at top
+                if not hasattr(self, '_alarm_font'):
+                    self._alarm_font = pygame.font.SysFont("monospace", 28, bold=True)
+                    self._alarm_font_sm = pygame.font.SysFont("monospace", 16)
+
+                # Wobble the text
+                wobble = math.sin(t * 6) * 3
+                alarm_text = "WAKE UP!"
+                at_surf = self._alarm_font.render(alarm_text, True, border_color)
+                atx = self.config.window_width // 2 - at_surf.get_width() // 2
+                self.screen.blit(at_surf, (atx, 60 + int(wobble)))
+
+                # Sun emoji / hint
+                hint = self._alarm_font_sm.render(
+                    "Press any key or say something to dismiss", True, (180, 160, 100)
+                )
+                hx = self.config.window_width // 2 - hint.get_width() // 2
+                self.screen.blit(hint, (hx, 92))
+
+                # Subtle warm tint over the whole screen
+                tint = pygame.Surface(
+                    (self.config.window_width, self.config.window_height), pygame.SRCALPHA
+                )
+                tint.fill((255, 200, 50, int(15 * pulse)))
+                self.screen.blit(tint, (0, 0))
 
             # Scanlines overlay
             if self.config.scanlines:
@@ -792,6 +973,7 @@ class ChibiAvatarApp:
         self.memory.save()
         # Cleanup
         self.feeds.stop()
+        self.alarm.stop()
         if self.vision:
             self.vision.stop()
         if self.voice_in:

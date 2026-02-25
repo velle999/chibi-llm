@@ -16,7 +16,7 @@ sudo apt install -y \
     espeak \
     sox \
     libsox-fmt-all \
-    aplay
+    alsa-utils
 
 # ── Python packages ──────────────────────────────────────────────────────────
 echo ""

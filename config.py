@@ -103,3 +103,7 @@ class Config:
     vision_awareness_interval: int = 60  # Passive scene check every N seconds
     vision_motion_threshold: float = 0.05  # % of pixels changed for motion
     vision_pip: bool = True              # Show camera thumbnail on screen
+
+    # ── Alarm ────────────────────────────────────────────────────────────
+    alarm_speak_interval: float = 8.0   # Seconds between wake-up messages
+    alarm_snooze_minutes: int = 5       # Default snooze duration

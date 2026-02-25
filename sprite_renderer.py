@@ -357,6 +357,7 @@ class ChibiRenderer:
         bob = 0
         if state_name == "IDLE": bob = math.sin(t * self.config.chibi_bob_speed) * self.config.chibi_bob_amount
         elif state_name == "HAPPY": bob = abs(math.sin(t * 6)) * 12
+        elif state_name == "ALARM": bob = abs(math.sin(t * 10)) * 15  # Super bouncy!
         elif state_name == "THINKING": bob = math.sin(t * 1.5) * 4
         elif state_name == "SLEEPING": bob = math.sin(t * 0.8) * 5
         elif state_name == "SPEAKING": bob = math.sin(t * 3) * 3
