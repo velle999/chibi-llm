@@ -439,7 +439,9 @@ class ChibiAvatarApp:
                 extra_system += "\n\n" + memory_context
             if live_context:
                 extra_system += (
-                    "\n\n--- LIVE DATA (reference naturally, don't dump raw numbers) ---\n"
+                    "\n\n--- BACKGROUND REFERENCE DATA (DO NOT mention unless asked) ---\n"
+                    "This data is available if Velle asks about weather, time, stocks, or crypto. "
+                    "Do NOT volunteer this information. Only use it to answer relevant questions.\n"
                     + live_context
                 )
 
