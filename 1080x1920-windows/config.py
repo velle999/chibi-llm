@@ -11,8 +11,8 @@ class Config:
     # ── Window ───────────────────────────────────────────────────────────
     window_width: int = 1080
     window_height: int = 1920     # Portrait 1080p
-    fullscreen: bool = True        # Kiosk mode for Pi
-    target_fps: int = 30           # 30 is fine for Pi 4
+    fullscreen: bool = False        # Kiosk mode for Pi
+    target_fps: int = 60           # 30 is fine for Pi 4
 
     # ── LLM Server (your PC) ────────────────────────────────────────────
     llm_host: str = "192.168.40.153"  # Your PC's IP
