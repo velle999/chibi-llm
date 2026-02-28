@@ -811,10 +811,12 @@ class ChibiAvatarApp:
         current_market = self.feeds.get_market()
         if not hasattr(self, '_prev_market_time'):
             self._prev_market_time = ""
+            self._market_alerted = set()  # Symbols already alerted this session
         if current_market.updated_at != self._prev_market_time:
             for t in current_market.tickers + current_market.crypto:
-                if abs(t.change_pct) > 3.0:
+                if abs(t.change_pct) > 7.0 and t.symbol not in self._market_alerted:
                     self.soul.on_market_move(t.symbol, t.change_pct)
+                    self._market_alerted.add(t.symbol)
             self._prev_market_time = current_market.updated_at
 
         # ── Soul impulses — spontaneous thoughts ─────────────────────────

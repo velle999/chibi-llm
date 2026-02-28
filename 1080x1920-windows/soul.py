@@ -711,7 +711,7 @@ class Soul:
 
     def on_market_move(self, symbol: str, change_pct: float):
         with self._lock:
-            if abs(change_pct) > 3.0:
+            if abs(change_pct) > 7.0:
                 direction = "up" if change_pct > 0 else "down"
                 self._add_event(f"{symbol} {change_pct:+.1f}%")
                 self._queue_impulse(
