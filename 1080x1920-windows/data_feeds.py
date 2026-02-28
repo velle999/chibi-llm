@@ -117,6 +117,29 @@ class MarketData:
         return " ".join(parts) if parts else "Market data unavailable."
 
 
+@dataclass
+class NewsHeadline:
+    title: str = ""
+    source: str = ""
+    published: str = ""
+    url: str = ""
+
+
+@dataclass
+class NewsData:
+    headlines: list = field(default_factory=list)
+    updated_at: str = ""
+
+    def summary(self, max_items: int = 8) -> str:
+        if not self.headlines:
+            return "News data unavailable."
+        items = []
+        for h in self.headlines[:max_items]:
+            src = f" ({h.source})" if h.source else ""
+            items.append(f"• {h.title}{src}")
+        return "Top headlines:\n" + "\n".join(items)
+
+
 # ─── Fetchers ────────────────────────────────────────────────────────────────
 
 def fetch_weather_owm(api_key: str, city: str, units: str = "imperial") -> WeatherData:
@@ -319,6 +342,55 @@ def fetch_fear_greed() -> tuple[int, str]:
         return -1, ""
 
 
+def fetch_news_google(topic: str = "", max_items: int = 10) -> list[NewsHeadline]:
+    """Fetch top headlines from Google News RSS (no API key needed)."""
+    import xml.etree.ElementTree as ET
+    headlines = []
+    try:
+        if topic:
+            url = f"https://news.google.com/rss/search?q={urllib.request.quote(topic)}&hl=en-US&gl=US&ceid=US:en"
+        else:
+            url = "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"
+
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("User-Agent", "chibi-llm/1.0")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            xml_data = resp.read().decode()
+
+        root = ET.fromstring(xml_data)
+        for item in root.findall(".//item")[:max_items]:
+            title = item.findtext("title", "")
+            source = item.findtext("source", "")
+            pub_date = item.findtext("pubDate", "")
+            link = item.findtext("link", "")
+
+            # Clean up title — Google News appends " - Source" to titles
+            if " - " in title and source:
+                title = title.rsplit(" - ", 1)[0].strip()
+
+            # Parse date to something short
+            short_date = ""
+            if pub_date:
+                try:
+                    from email.utils import parsedate_to_datetime
+                    dt = parsedate_to_datetime(pub_date)
+                    short_date = dt.strftime("%I:%M %p")
+                except Exception:
+                    short_date = pub_date[:16]
+
+            headlines.append(NewsHeadline(
+                title=title,
+                source=source,
+                published=short_date,
+                url=link,
+            ))
+
+    except Exception as e:
+        print(f"[News] Google News RSS error: {e}")
+
+    return headlines
+
+
 def get_market_status() -> str:
     """Estimate US market status based on current time."""
     now = datetime.now()
@@ -351,6 +423,7 @@ class DataFeedManager:
         self.config = config
         self.weather = WeatherData()
         self.market = MarketData()
+        self.news = NewsData()
         self._running = True
         self._lock = threading.Lock()
 
@@ -361,6 +434,10 @@ class DataFeedManager:
 
         if self.config.market_enabled:
             t = threading.Thread(target=self._market_loop, daemon=True)
+            t.start()
+
+        if getattr(self.config, 'news_enabled', True):
+            t = threading.Thread(target=self._news_loop, daemon=True)
             t.start()
 
     def _weather_loop(self):
@@ -417,6 +494,23 @@ class DataFeedManager:
 
             time.sleep(self.config.market_interval)
 
+    def _news_loop(self):
+        """Fetch news headlines periodically."""
+        interval = getattr(self.config, 'news_interval', 600)
+        topic = getattr(self.config, 'news_topic', '')
+        while self._running:
+            try:
+                headlines = fetch_news_google(topic=topic, max_items=10)
+                with self._lock:
+                    self.news = NewsData(
+                        headlines=headlines,
+                        updated_at=datetime.now().strftime("%H:%M"),
+                    )
+                print(f"[News] Updated: {len(headlines)} headlines")
+            except Exception as e:
+                print(f"[News] Feed error: {e}")
+            time.sleep(interval)
+
     def get_context(self) -> str:
         """
         Returns a context string to inject into the LLM system prompt.
@@ -430,6 +524,9 @@ class DataFeedManager:
 
             if self.config.market_enabled and (self.market.tickers or self.market.crypto):
                 parts.append(f"[MARKET DATA] {self.market.summary()}")
+
+            if getattr(self.config, 'news_enabled', True) and self.news.headlines:
+                parts.append(f"[NEWS HEADLINES] {self.news.summary()}")
 
             now = datetime.now()
             parts.append(
@@ -445,6 +542,10 @@ class DataFeedManager:
     def get_market(self) -> MarketData:
         with self._lock:
             return self.market
+
+    def get_news(self) -> NewsData:
+        with self._lock:
+            return self.news
 
     def stop(self):
         self._running = False

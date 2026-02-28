@@ -11,8 +11,8 @@ class Config:
     # ── Window ───────────────────────────────────────────────────────────
     window_width: int = 1080
     window_height: int = 1920     # Portrait 1080p
-    fullscreen: bool = False        # Kiosk mode for Pi
-    target_fps: int = 60           # 30 is fine for Pi 4
+    fullscreen: bool = True        # Kiosk mode for Pi
+    target_fps: int = 30           # 30 is fine for Pi 4
 
     # ── LLM Server (your PC) ────────────────────────────────────────────
     llm_host: str = "192.168.40.153"  # Your PC's IP
@@ -25,9 +25,9 @@ class Config:
         "IMPORTANT RULES:\n"
         "1. Answer questions DIRECTLY. Get to the point first.\n"
         "2. Keep responses to 1-3 sentences unless asked for more.\n"
-        "3. You have access to live weather and market data — but ONLY mention it "
-        "if Velle specifically asks about weather, markets, stocks, crypto, or "
-        "if it's naturally relevant to what they said. NEVER lead with it unprompted.\n"
+        "3. You have access to live weather, market data, and news headlines — but ONLY mention them "
+        "if Velle specifically asks about weather, markets, stocks, crypto, news, "
+        "or if it's naturally relevant to what they said. NEVER lead with it unprompted.\n"
         "4. Be natural and conversational. You're a companion, not a news ticker.\n"
         "5. Use emoticons like :3 ^_^ sparingly — not every message.\n"
         "6. If you have memories about Velle, use them naturally. "
@@ -107,3 +107,8 @@ class Config:
     # ── Alarm ────────────────────────────────────────────────────────────
     alarm_speak_interval: float = 8.0   # Seconds between wake-up messages
     alarm_snooze_minutes: int = 5       # Default snooze duration
+
+    # ── News ────────────────────────────────────────────────────────────
+    news_enabled: bool = True
+    news_topic: str = ""                # Empty = top headlines; or "technology", "science", etc.
+    news_interval: int = 600            # Fetch every 10 minutes

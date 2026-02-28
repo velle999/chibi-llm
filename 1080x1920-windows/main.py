@@ -22,6 +22,7 @@ from voice_output import VoiceOutput
 from data_feeds import DataFeedManager
 from hud_overlay import HUDOverlay
 from memory import PersistentMemory
+from soul import Soul
 from vision import Vision, is_vision_request
 from alarm import AlarmManager, is_alarm_request, is_dismiss_word, is_snooze_word, parse_alarm_time
 from config import Config
@@ -382,6 +383,7 @@ class ChibiAvatarApp:
         # Data feeds + HUD
         self.feeds = DataFeedManager(self.config)
         self.hud = HUDOverlay(self.config)
+        self.soul = Soul(self.config)
 
         # Persistent memory
         self.memory = PersistentMemory()
@@ -557,12 +559,12 @@ class ChibiAvatarApp:
 
         thread = threading.Thread(
             target=self._generate_response,
-            args=(vision_request,),
+            args=(vision_request, text),
             daemon=True,
         )
         thread.start()
 
-    def _generate_response(self, vision_request=False):
+    def _generate_response(self, vision_request=False, user_text=""):
         """Background thread: stream response from LLM."""
         try:
             # Inject live data + memory context
@@ -592,9 +594,18 @@ class ChibiAvatarApp:
             if live_context:
                 extra_system += (
                     "\n\n--- BACKGROUND REFERENCE DATA (DO NOT mention unless asked) ---\n"
-                    "This data is available if Velle asks about weather, time, stocks, or crypto. "
+                    "This data is available if Velle asks about weather, time, stocks, crypto, or news. "
                     "Do NOT volunteer this information. Only use it to answer relevant questions.\n"
                     + live_context
+                )
+
+            # Soul — mood colors the response style
+            mood_context = self.soul.get_mood_context()
+            if mood_context:
+                extra_system += (
+                    "\n\n--- YOUR CURRENT INNER STATE ---\n"
+                    "Let this subtly influence your tone and energy, but don't describe your mood explicitly.\n"
+                    + mood_context
                 )
 
             full_response = ""
@@ -612,6 +623,7 @@ class ChibiAvatarApp:
 
             # Track interaction
             self.memory.record_interaction()
+            self.soul.on_interaction(user_text, full_response)
             self._message_count += 1
 
             # Extract memories every 6 messages (in separate thread, non-blocking)
@@ -742,6 +754,61 @@ class ChibiAvatarApp:
             # Drain any transcriptions that came in while speaking (they're just echo)
             while self.voice_in.get_transcription() is not None:
                 pass
+
+        # ── Soul — monitor feed changes ──────────────────────────────────
+        # Weather change detection
+        current_weather = self.feeds.get_weather()
+        if not hasattr(self, '_prev_weather_condition'):
+            self._prev_weather_condition = current_weather.condition
+        if current_weather.condition != self._prev_weather_condition and current_weather.condition != "unknown":
+            self.soul.on_weather_change(self._prev_weather_condition, current_weather.condition, current_weather)
+            self._prev_weather_condition = current_weather.condition
+
+        # News update detection
+        current_news = self.feeds.get_news()
+        if not hasattr(self, '_prev_news_time'):
+            self._prev_news_time = ""
+        if current_news.updated_at != self._prev_news_time and current_news.headlines:
+            self.soul.on_news_update(current_news.headlines)
+            self._prev_news_time = current_news.updated_at
+
+        # Big market move detection
+        current_market = self.feeds.get_market()
+        if not hasattr(self, '_prev_market_time'):
+            self._prev_market_time = ""
+        if current_market.updated_at != self._prev_market_time:
+            for t in current_market.tickers + current_market.crypto:
+                if abs(t.change_pct) > 3.0:
+                    self.soul.on_market_move(t.symbol, t.change_pct)
+            self._prev_market_time = current_market.updated_at
+
+        # ── Soul impulses — spontaneous thoughts ─────────────────────────
+        if not self.is_generating and self.state in (AvatarState.IDLE, AvatarState.SLEEPING):
+            impulse = self.soul.get_impulse()
+            if impulse:
+                # Wake up if sleeping
+                if self.state == AvatarState.SLEEPING:
+                    self.set_state(AvatarState.IDLE)
+                    self.last_interaction = time.time()
+
+                # Display the thought
+                self.bubble.set_text(impulse)
+                self.set_state(AvatarState.SPEAKING)
+
+                # Speak it
+                if self.voice_out:
+                    self.voice_out.speak(impulse)
+                    # Brief pause to let TTS start
+                    time.sleep(0.3)
+
+                # Add to conversation so LLM has context
+                self.conversation.append({"role": "assistant", "content": impulse})
+                self.last_interaction = time.time()
+
+                # Go back to idle after a moment
+                time.sleep(2.0)
+                if not self.is_generating:
+                    self.set_state(AvatarState.IDLE)
 
         # Auto-sleep after inactivity
         if (self.state == AvatarState.IDLE and
@@ -1097,6 +1164,7 @@ class ChibiAvatarApp:
         # Cleanup
         self.feeds.stop()
         self.alarm.stop()
+        self.soul.cleanup()
         if self.vision:
             self.vision.stop()
         if self.voice_in:
