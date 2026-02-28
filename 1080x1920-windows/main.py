@@ -631,7 +631,7 @@ class ChibiAvatarApp:
             # Wait for TTS to finish with a hard timeout
             if self.voice_out:
                 tts_wait_start = time.time()
-                while self.voice_out.busy and (time.time() - tts_wait_start) < 30:
+                while self.voice_out.busy and (time.time() - tts_wait_start) < 120:
                     time.sleep(0.1)
                 # Extra settle time so mic doesn't catch tail end of audio
                 time.sleep(0.8)

@@ -140,15 +140,24 @@ class VoiceOutput:
             self._sox_available = False
 
     def speak(self, text: str):
-        """Queue text for speech. Non-blocking."""
-        if text and text.strip():
-            # Clean text for TTS — strip special chars that confuse piper
-            clean = text.strip()
-            clean = clean.replace('"', '').replace("'", "'")
-            clean = clean.replace(':3', '').replace('^_^', '')
-            clean = clean.replace('>w<', '').replace('~', '')
-            if clean:
-                self.speak_queue.put(clean)
+        """Queue text for speech. Non-blocking. Splits into sentences for reliability."""
+        if not text or not text.strip():
+            return
+        # Clean text for TTS
+        clean = text.strip()
+        clean = clean.replace('"', '').replace("'", "'")
+        clean = clean.replace(':3', '').replace('^_^', '')
+        clean = clean.replace('>w<', '').replace('~', '')
+        if not clean:
+            return
+
+        # Split into sentences so piper doesn't choke on long text
+        import re
+        sentences = re.split(r'(?<=[.!?])\s+', clean)
+        for sentence in sentences:
+            s = sentence.strip()
+            if s:
+                self.speak_queue.put(s)
 
     def speak_now(self, text: str):
         """Clear queue and speak immediately."""
@@ -212,7 +221,7 @@ class VoiceOutput:
                  "--sentence_silence", "0.15"],
                 input=text.encode("utf-8"),
                 capture_output=True,
-                timeout=30,
+                timeout=120,
             )
 
             if proc.returncode != 0:
@@ -316,7 +325,7 @@ class VoiceOutput:
                  "-v", "en+f3",  # female voice variant 3
                  text],
                 capture_output=True,
-                timeout=30,
+                timeout=120,
             )
         except FileNotFoundError:
             print("[TTS] espeak not found! No TTS available.")
@@ -337,7 +346,7 @@ class VoiceOutput:
                 subprocess.run(
                     ["aplay", "-q", filepath],
                     capture_output=True,
-                    timeout=30,
+                    timeout=120,
                 )
                 return
             except FileNotFoundError:
@@ -355,7 +364,7 @@ class VoiceOutput:
                 pygame.mixer.music.load(filepath)
                 pygame.mixer.music.play()
                 start = time.time()
-                while pygame.mixer.music.get_busy() and (time.time() - start) < 30:
+                while pygame.mixer.music.get_busy() and (time.time() - start) < 120:
                     time.sleep(0.05)
                 pygame.mixer.music.stop()
         except Exception as e:

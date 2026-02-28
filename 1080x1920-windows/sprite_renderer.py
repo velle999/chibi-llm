@@ -264,11 +264,13 @@ class ChibiRenderer:
         pygame.draw.ellipse(bs, trim, (4, 4, bw, bh), 2)
 
         # Bow
-        pygame.draw.circle(bs, self.config.neon_secondary, (bw // 2 + 4, 12), 4)
-        pygame.draw.circle(bs, (255, 200, 230), (bw // 2 + 4, 12), 2)
+        bow_r = max(2, int(4 * s))
+        bow_y = int(12 * s)
+        pygame.draw.circle(bs, self.config.neon_secondary, (bw // 2 + 4, bow_y), bow_r)
+        pygame.draw.circle(bs, (255, 200, 230), (bw // 2 + 4, bow_y), max(1, int(2 * s)))
 
         # Heart
-        self._draw_heart(bs, bw // 2 + 4, bh // 2 + 4, 4, trim, 120)
+        self._draw_heart(bs, bw // 2 + 4, bh // 2 + 4, int(4 * s), trim, 120)
         surface.blit(bs, (cx - bw // 2 - 4, cy))
 
         # Arms
@@ -291,13 +293,13 @@ class ChibiRenderer:
         leg_r = int(8 * s)
         leg_y = cy + bh - 4
         for side, phase in [(-1, 0), (1, 1)]:
-            bounce = abs(math.sin(t * 8 + phase)) * 3 if state_name == "HAPPY" else 0
+            bounce = abs(math.sin(t * 8 + phase)) * 3 * s if state_name == "HAPPY" else 0
             if state_name == "ALARM":
-                bounce = abs(math.sin(t * 10 + phase)) * 5
-            lx, ly = cx + side * 10, leg_y + int(bounce)
+                bounce = abs(math.sin(t * 10 + phase)) * 5 * s
+            lx, ly = cx + side * int(10 * s), leg_y + int(bounce)
             pygame.draw.circle(surface, (40, 38, 60), (lx, ly), leg_r)
             pygame.draw.circle(surface, trim, (lx, ly), leg_r, 1)
-            pygame.draw.circle(surface, (80, 75, 110), (lx - 2, ly - 2), 2)
+            pygame.draw.circle(surface, (80, 75, 110), (lx - int(2 * s), ly - int(2 * s)), max(1, int(2 * s)))
 
     # ─── Cat Ears ────────────────────────────────────────────────────────
 
@@ -381,18 +383,22 @@ class ChibiRenderer:
         # Hair
         hair_c = (35, 32, 55)
         for i in range(5):
-            bx = head_cx - 30 + i * 15
+            bx = head_cx - int(30 * s) + i * int(15 * s)
             pygame.draw.circle(surface, hair_c,
-                               (bx, int(cy - head_h // 2 + 5 + breath_offset)),
-                               int(18 + math.sin(i * 1.3) * 5))
+                               (bx, int(cy - head_h // 2 + 5 * s + breath_offset)),
+                               int((18 + math.sin(i * 1.3) * 5) * s))
         for side in [-1, 1]:
-            bang_x = head_cx + side * (head_radius - 5)
+            bang_x = head_cx + side * (head_radius - int(5 * s))
             for j in range(3):
                 pygame.draw.circle(surface, hair_c,
-                                   (bang_x, int(cy - 20 + j * 12 + breath_offset)), 12 - j * 2)
+                                   (bang_x, int(cy - 20 * s + j * 12 * s + breath_offset)),
+                                   int((12 - j * 2) * s))
         # Hair shine
+        shine_w, shine_h = int(30 * s), int(8 * s)
         pygame.draw.arc(surface, (100, 90, 140),
-                        (head_cx - 15, int(cy - head_h // 2 + 8 + breath_offset), 30, 8),
+                        (head_cx - shine_w // 2,
+                         int(cy - head_h // 2 + 8 * s + breath_offset),
+                         shine_w, shine_h),
                         0, math.pi, 2)
 
         # ── Eyes ─────────────────────────────────────────────────────────
@@ -406,25 +412,26 @@ class ChibiRenderer:
             # Kawaii closed eyes (^ ^) with gentle breathing movement
             for ex in [lex, rex]:
                 pygame.draw.arc(surface, self.config.neon_primary,
-                                (ex - 12, eye_y - 8, 24, 16),
-                                math.pi * 0.15, math.pi * 0.85, 3)
+                                (ex - int(12 * s), eye_y - int(8 * s), int(24 * s), int(16 * s)),
+                                math.pi * 0.15, math.pi * 0.85, max(2, int(3 * s)))
             # Zzz
-            font = pygame.font.SysFont("monospace", 18, bold=True)
-            zoff = math.sin(t * 2) * 5
+            font = pygame.font.SysFont("monospace", int(18 * s), bold=True)
+            zoff = math.sin(t * 2) * 5 * s
             for i, ch in enumerate("Zzz"):
                 alpha = int(200 - i * 40)
                 z_s = font.render(ch, True, (*self.config.neon_accent, ))
-                surface.blit(z_s, (head_cx + 45 + i * 14, eye_y - 45 - i * 16 + zoff))
+                surface.blit(z_s, (head_cx + int(45 * s) + i * int(14 * s),
+                                   eye_y - int(45 * s) - i * int(16 * s) + zoff))
 
         elif state_name == "HAPPY":
             # Happy closed eyes (n_n)
             for ex in [lex, rex]:
                 pygame.draw.arc(surface, self.config.neon_primary,
-                                (ex - 12, eye_y - 6, 24, 16),
-                                math.pi * 1.15, math.pi * 1.85, 3)
-                ss = 5 + math.sin(t * 6) * 2
-                self._draw_star(surface, ex + 10, eye_y - 14, ss, (255, 230, 150), t * 90)
-                self._draw_star(surface, ex - 8, eye_y - 12, ss * 0.6, (255, 200, 255), -t * 120)
+                                (ex - int(12 * s), eye_y - int(6 * s), int(24 * s), int(16 * s)),
+                                math.pi * 1.15, math.pi * 1.85, max(2, int(3 * s)))
+                ss = (5 + math.sin(t * 6) * 2) * s
+                self._draw_star(surface, ex + int(10 * s), eye_y - int(14 * s), ss, (255, 230, 150), t * 90)
+                self._draw_star(surface, ex - int(8 * s), eye_y - int(12 * s), ss * 0.6, (255, 200, 255), -t * 120)
 
         elif blink > 0.7:
             # Nearly closed — horizontal line
@@ -455,23 +462,23 @@ class ChibiRenderer:
 
                 pox, poy = 0, 0
                 if state_name == "THINKING":
-                    pox, poy = int(math.sin(t * 2) * 4), int(math.cos(t * 2) * 3) - 2
+                    pox, poy = int(math.sin(t * 2) * 4 * s), int(math.cos(t * 2) * 3 * s) - int(2 * s)
 
                 icx, icy = ex + pox, eye_y + poy
-                ir = er - 2
+                ir = er - max(1, int(2 * s))
 
                 # Wake transition — eyes go wide
                 if self.wake_transition > 0:
                     ir = int(ir * (1 + self.wake_transition * 0.3))
 
                 pygame.draw.circle(surface, iris_c, (icx, icy), ir)
-                pygame.draw.circle(surface, tuple(max(0, c - 40) for c in iris_c), (icx, icy), ir, 3)
-                pygame.draw.circle(surface, (8, 8, 18), (icx, icy), ir - 5)
+                pygame.draw.circle(surface, tuple(max(0, c - 40) for c in iris_c), (icx, icy), ir, max(2, int(3 * s)))
+                pygame.draw.circle(surface, (8, 8, 18), (icx, icy), ir - max(2, int(5 * s)))
 
                 # Star highlight
-                self._draw_star(surface, icx - 4, icy - 5, 5, (255, 255, 255), t * 30)
-                pygame.draw.circle(surface, (255, 255, 255), (icx + 4, icy + 3), 3)
-                pygame.draw.circle(surface, (200, 220, 255), (icx - 2, icy + 5), 1)
+                self._draw_star(surface, icx - int(4 * s), icy - int(5 * s), 5 * s, (255, 255, 255), t * 30)
+                pygame.draw.circle(surface, (255, 255, 255), (icx + int(4 * s), icy + int(3 * s)), max(1, int(3 * s)))
+                pygame.draw.circle(surface, (200, 220, 255), (icx - int(2 * s), icy + int(5 * s)), max(1, int(s)))
                 pygame.draw.ellipse(surface, (30, 28, 45), erect, 2)
 
             # Confused spirals
@@ -479,55 +486,63 @@ class ChibiRenderer:
                 for ex in [lex, rex]:
                     for a in range(0, 720, 30):
                         rad = math.radians(a + t * 200)
-                        r = (8 + math.sin(t * 3) * 2) * (a / 720)
+                        r = ((8 + math.sin(t * 3) * 2) * (a / 720)) * s
                         pygame.draw.circle(surface, self.config.neon_secondary,
-                                           (int(ex + math.cos(rad) * r), int(eye_y + math.sin(rad) * r)), 1)
+                                           (int(ex + math.cos(rad) * r), int(eye_y + math.sin(rad) * r)),
+                                           max(1, int(s)))
 
         # ── Mouth ────────────────────────────────────────────────────────
         my = int(cy + 22 * s + breath_offset)
 
         if state_name == "HAPPY":
-            w = 20
-            pts = [(head_cx - w, my), (head_cx - w // 3, my + 8), (head_cx, my + 2),
-                   (head_cx + w // 3, my + 8), (head_cx + w, my)]
+            w = int(20 * s)
+            pts = [(head_cx - w, my), (head_cx - w // 3, my + int(8 * s)), (head_cx, my + int(2 * s)),
+                   (head_cx + w // 3, my + int(8 * s)), (head_cx + w, my)]
             pygame.draw.lines(surface, self.config.neon_secondary, False, pts, 2)
-            pygame.draw.line(surface, (220, 220, 235), (head_cx + 8, my), (head_cx + 6, my + 5), 2)
+            pygame.draw.line(surface, (220, 220, 235),
+                             (head_cx + int(8 * s), my),
+                             (head_cx + int(6 * s), my + int(5 * s)), 2)
         elif state_name == "SPEAKING":
-            mo = abs(math.sin(t * 8)) * 10
-            mw, mh = 16, max(4, int(mo + 4))
+            mo = abs(math.sin(t * 8)) * 10 * s
+            mw, mh = int(16 * s), max(int(4 * s), int(mo + 4 * s))
             pygame.draw.ellipse(surface, (30, 15, 40), (head_cx - mw // 2, my - 2, mw, mh))
-            if mh > 8:
-                pygame.draw.ellipse(surface, (200, 100, 120), (head_cx - 4, my + mh - 8, 8, 5))
+            if mh > int(8 * s):
+                tw, th = int(8 * s), int(5 * s)
+                pygame.draw.ellipse(surface, (200, 100, 120),
+                                    (head_cx - tw // 2, my + mh - th - int(3 * s), tw, th))
             pygame.draw.ellipse(surface, self.config.neon_primary, (head_cx - mw // 2, my - 2, mw, mh), 2)
         elif state_name == "CONFUSED":
-            pts = [(head_cx - 14 + i * 2, my + math.sin(t * 4 + i * 0.7) * 4) for i in range(16)]
+            pts = [(head_cx - int(14 * s) + int(i * 2 * s),
+                    my + math.sin(t * 4 + i * 0.7) * 4 * s) for i in range(16)]
             if len(pts) > 1: pygame.draw.lines(surface, self.config.neon_secondary, False, pts, 2)
         elif state_name == "THINKING":
-            pygame.draw.circle(surface, (30, 15, 40), (head_cx + 3, my + 3), 6)
-            pygame.draw.circle(surface, self.config.neon_accent, (head_cx + 3, my + 3), 6, 2)
+            r = int(6 * s)
+            pygame.draw.circle(surface, (30, 15, 40), (head_cx + int(3 * s), my + int(3 * s)), r)
+            pygame.draw.circle(surface, self.config.neon_accent, (head_cx + int(3 * s), my + int(3 * s)), r, 2)
         elif state_name == "SLEEPING":
-            # Breathing affects mouth slightly
             pygame.draw.arc(surface, self.config.neon_primary,
-                            (head_cx - 10, my - 2, 20, int(10 + breath * 2)),
+                            (head_cx - int(10 * s), my - 2, int(20 * s), int((10 + breath * 2) * s)),
                             math.pi * 1.1, math.pi * 1.9, 2)
-            dy = my + 6 + abs(math.sin(t * 2)) * 4
-            pygame.draw.circle(surface, (150, 180, 220), (head_cx + 8, int(dy)), 2)
+            dy = my + int(6 * s) + abs(math.sin(t * 2)) * 4 * s
+            pygame.draw.circle(surface, (150, 180, 220), (head_cx + int(8 * s), int(dy)), int(2 * s))
         elif state_name == "LISTENING":
-            pygame.draw.ellipse(surface, (30, 15, 40), (head_cx - 5, my, 10, 8))
-            pygame.draw.ellipse(surface, self.config.neon_primary, (head_cx - 5, my, 10, 8), 1)
+            ow, oh = int(10 * s), int(8 * s)
+            pygame.draw.ellipse(surface, (30, 15, 40), (head_cx - ow // 2, my, ow, oh))
+            pygame.draw.ellipse(surface, self.config.neon_primary, (head_cx - ow // 2, my, ow, oh), 1)
         elif state_name == "ALARM":
-            # Big open mouth — yelling
-            mo = abs(math.sin(t * 10)) * 12
-            mw, mh = 20, max(6, int(mo + 6))
+            mo = abs(math.sin(t * 10)) * 12 * s
+            mw, mh = int(20 * s), max(int(6 * s), int(mo + 6 * s))
             pygame.draw.ellipse(surface, (30, 15, 40), (head_cx - mw // 2, my - 2, mw, mh))
             pygame.draw.ellipse(surface, self.config.neon_warning, (head_cx - mw // 2, my - 2, mw, mh), 2)
         else:
             # Cat mouth :3
-            cw = 8
+            cw = int(8 * s)
             pygame.draw.arc(surface, self.config.neon_primary,
-                            (head_cx - cw - 4, my - 3, cw * 2, 10), math.pi * 1.1, math.pi * 1.9, 2)
+                            (head_cx - cw - int(4 * s), my - int(3 * s), cw * 2, int(10 * s)),
+                            math.pi * 1.1, math.pi * 1.9, 2)
             pygame.draw.arc(surface, self.config.neon_primary,
-                            (head_cx - cw + 4, my - 3, cw * 2, 10), math.pi * 1.1, math.pi * 1.9, 2)
+                            (head_cx - cw + int(4 * s), my - int(3 * s), cw * 2, int(10 * s)),
+                            math.pi * 1.1, math.pi * 1.9, 2)
 
         # ── Blush ────────────────────────────────────────────────────────
         ba = 35
@@ -537,36 +552,39 @@ class ChibiRenderer:
         elif state_name == "LISTENING": ba = 45
         elif state_name == "ALARM": ba, pulse = 60, math.sin(t * 6) * 8
 
-        bw, bh = int(28 + pulse), int(16 + pulse * 0.5)
+        bw, bh = int((28 + pulse) * s), int((16 + pulse * 0.5) * s)
         blush = pygame.Surface((bw + 2, bh + 2), pygame.SRCALPHA)
         pygame.draw.ellipse(blush, (255, 120, 150, ba), (1, 1, bw, bh))
 
         for ex in [lex, rex]:
-            bx, by = ex - bw // 2 - 4, eye_y + int(16 * s)
+            bx, by = ex - bw // 2 - int(4 * s), eye_y + int(16 * s)
             surface.blit(blush, (bx, by))
             if ba > 40:
                 for i in range(3):
-                    lx = bx + 6 + i * 6
-                    pygame.draw.line(surface, (255, 150, 170), (lx, by + 3), (lx + 4, by + 9), 1)
+                    lx = bx + int(6 * s) + i * int(6 * s)
+                    pygame.draw.line(surface, (255, 150, 170),
+                                     (lx, by + int(3 * s)),
+                                     (lx + int(4 * s), by + int(9 * s)), max(1, int(s)))
 
         # ── Antenna ──────────────────────────────────────────────────────
-        ant_tip_y = cy - head_radius * 0.9 - 30 + math.sin(t * 3) * 6 + breath_offset
-        ant_tip_x = head_cx + 8
+        ant_tip_y = cy - head_radius * 0.9 - 30 * s + math.sin(t * 3) * 6 * s + breath_offset
+        ant_tip_x = head_cx + int(8 * s)
         pygame.draw.line(surface, (80, 75, 110),
-                         (int(head_cx - 2), int(cy - head_radius * 0.9 + breath_offset)),
-                         (int(ant_tip_x), int(ant_tip_y)), 2)
+                         (int(head_cx - 2 * s), int(cy - head_radius * 0.9 + breath_offset)),
+                         (int(ant_tip_x), int(ant_tip_y)), max(2, int(2 * s)))
 
         orb_c = self.config.neon_primary
         if state_name == "HAPPY": orb_c = (255, 220, 100)
         elif state_name == "LISTENING": orb_c = self.config.neon_secondary
         elif state_name == "ALARM": orb_c = (255, 200, 50)
 
-        orb_size = 6 + math.sin(t * 5) * 2
+        orb_size = (6 + math.sin(t * 5) * 2) * s
         self._draw_star(surface, int(ant_tip_x), int(ant_tip_y), orb_size, orb_c, t * 60)
         ga = int(30 + 20 * math.sin(t * 4))
-        gsurf = pygame.Surface((30, 30), pygame.SRCALPHA)
-        pygame.draw.circle(gsurf, (*orb_c, ga), (15, 15), 12)
-        surface.blit(gsurf, (int(ant_tip_x) - 15, int(ant_tip_y) - 15))
+        gr = int(12 * s)
+        gsurf = pygame.Surface((gr * 2 + 6, gr * 2 + 6), pygame.SRCALPHA)
+        pygame.draw.circle(gsurf, (*orb_c, ga), (gr + 3, gr + 3), gr)
+        surface.blit(gsurf, (int(ant_tip_x) - gr - 3, int(ant_tip_y) - gr - 3))
 
     # ─── Main Draw ───────────────────────────────────────────────────────
 
