@@ -467,12 +467,18 @@ class CalendarMonitor:
 
     @staticmethod
     def _parse_ical_date(val: str) -> str:
-        """Parse various iCal date formats to ISO string."""
+        """Parse various iCal date formats to local ISO string."""
         val = val.strip()
         try:
             if "T" in val:
+                is_utc = val.endswith("Z")
                 clean = val.rstrip("Z")
                 dt = datetime.strptime(clean, "%Y%m%dT%H%M%S")
+                if is_utc:
+                    # Convert UTC to local time
+                    from datetime import timezone
+                    dt = dt.replace(tzinfo=timezone.utc).astimezone(tz=None)
+                    dt = dt.replace(tzinfo=None)  # Strip tz for consistent isoformat
                 return dt.isoformat()
             else:
                 dt = datetime.strptime(val, "%Y%m%d")
