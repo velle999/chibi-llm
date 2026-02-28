@@ -1167,9 +1167,9 @@ class ChibiAvatarApp:
                             pip_surf = pygame.image.frombuffer(
                                 img.tobytes(), (pip_w, pip_h), 'RGB'
                             )
-                            # Position: bottom-right, above input box
+                            # Position: bottom-right, above ticker bar
                             px = self.config.window_width - pip_w - 12
-                            py = self.config.window_height - pip_h - 100
+                            py = self.config.window_height - pip_h - 180
                             # Border
                             border_rect = pygame.Rect(px - 2, py - 2, pip_w + 4, pip_h + 4)
                             pygame.draw.rect(self.screen, self.config.neon_primary,
