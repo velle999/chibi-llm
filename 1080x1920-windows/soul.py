@@ -353,6 +353,31 @@ class CalendarMonitor:
                 continue
         return upcoming
 
+    def get_all_events(self) -> list[dict]:
+        """Returns all cached future events with formatted dates."""
+        self._maybe_fetch()
+        now = datetime.now()
+        events = []
+        for ev in self._events:
+            try:
+                start = datetime.fromisoformat(ev["start"])
+                if start >= now:
+                    delta = start - now
+                    days = delta.days
+                    if days == 0:
+                        when = f"today at {start.strftime('%I:%M %p')}"
+                    elif days == 1:
+                        when = f"tomorrow at {start.strftime('%I:%M %p')}"
+                    elif days < 7:
+                        when = f"{start.strftime('%A')} at {start.strftime('%I:%M %p')}"
+                    else:
+                        when = start.strftime('%B %d at %I:%M %p')
+                    events.append({**ev, "when": when, "days_until": days})
+            except Exception:
+                continue
+        events.sort(key=lambda e: e.get("days_until", 999))
+        return events
+
     def get_reminders(self) -> list[str]:
         """Returns reminder strings for events happening soon (15 min)."""
         reminders = []
@@ -367,14 +392,14 @@ class CalendarMonitor:
         return reminders
 
     def get_context(self) -> str:
-        """Calendar context for LLM."""
-        upcoming = self.get_upcoming(minutes_ahead=120)
-        if not upcoming:
+        """Full calendar context for LLM — all known events."""
+        all_events = self.get_all_events()
+        if not all_events:
             return ""
         items = []
-        for ev in upcoming[:5]:
-            items.append(f"• {ev['summary']} in {ev['minutes_until']} min")
-        return "Upcoming calendar events:\n" + "\n".join(items)
+        for ev in all_events[:15]:
+            items.append(f"• {ev['summary']} — {ev['when']}")
+        return "Calendar events:\n" + "\n".join(items)
 
     def _maybe_fetch(self):
         now = time.time()
@@ -389,7 +414,12 @@ class CalendarMonitor:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 ical_data = resp.read().decode()
             self._events = self._parse_ical(ical_data)
-            print(f"[Calendar] Fetched {len(self._events)} events")
+            if self._events:
+                print(f"[Calendar] Fetched {len(self._events)} events:")
+                for ev in self._events[:5]:
+                    print(f"[Calendar]   • {ev.get('summary', '?')} @ {ev.get('start', '?')}")
+            else:
+                print(f"[Calendar] Fetched ICS ({len(ical_data)} bytes) but found 0 future events")
         except Exception as e:
             print(f"[Calendar] Error: {e}")
 
@@ -401,41 +431,54 @@ class CalendarMonitor:
         current = {}
 
         for line in data.splitlines():
-            line = line.strip()
+            # Handle line folding (continuation lines start with space/tab)
+            line = line.rstrip('\r')
+
             if line == "BEGIN:VEVENT":
                 in_event = True
                 current = {}
             elif line == "END:VEVENT":
                 in_event = False
                 if "summary" in current and "start" in current:
-                    # Only keep future events (within next 7 days)
+                    # Keep events within next 60 days
                     try:
                         start = datetime.fromisoformat(current["start"])
-                        if now <= start <= now + timedelta(days=7):
+                        if now - timedelta(hours=1) <= start <= now + timedelta(days=60):
                             events.append(current)
                     except Exception:
                         pass
             elif in_event:
                 if line.startswith("SUMMARY:"):
-                    current["summary"] = line[8:]
+                    current["summary"] = line[8:].strip()
+                elif line.startswith("SUMMARY;"):
+                    # SUMMARY;LANGUAGE=en:Event Name
+                    current["summary"] = line.split(":", 1)[-1].strip()
                 elif line.startswith("DTSTART"):
-                    # Handle various date formats
-                    val = line.split(":", 1)[-1]
-                    try:
-                        if "T" in val:
-                            # 20250228T140000Z or 20250228T140000
-                            val = val.rstrip("Z")
-                            dt = datetime.strptime(val, "%Y%m%dT%H%M%S")
-                        else:
-                            dt = datetime.strptime(val, "%Y%m%d")
-                        current["start"] = dt.isoformat()
-                    except Exception:
-                        current["start"] = val
+                    val = line.split(":", 1)[-1].strip()
+                    current["start"] = self._parse_ical_date(val)
                 elif line.startswith("DTEND"):
-                    val = line.split(":", 1)[-1]
+                    val = line.split(":", 1)[-1].strip()
                     current["end"] = val
+                elif line.startswith("DESCRIPTION:"):
+                    current["description"] = line[12:].strip()[:100]
 
+        events.sort(key=lambda e: e.get("start", ""))
         return events
+
+    @staticmethod
+    def _parse_ical_date(val: str) -> str:
+        """Parse various iCal date formats to ISO string."""
+        val = val.strip()
+        try:
+            if "T" in val:
+                clean = val.rstrip("Z")
+                dt = datetime.strptime(clean, "%Y%m%dT%H%M%S")
+                return dt.isoformat()
+            else:
+                dt = datetime.strptime(val, "%Y%m%d")
+                return dt.isoformat()
+        except Exception:
+            return val
 
 
 # ─── Soul ────────────────────────────────────────────────────────────────────

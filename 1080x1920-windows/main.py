@@ -604,17 +604,17 @@ class ChibiAvatarApp:
             cal_context = self.soul.calendar.get_context()
             if cal_context:
                 extra_system += (
-                    "\n\n[CALENDAR] Velle's upcoming events (from Google Calendar). "
-                    "ONLY reference these EXACT events. NEVER invent or guess events.\n"
+                    "\n\n[CALENDAR — REAL DATA FROM GOOGLE CALENDAR]\n"
+                    "These are Velle's ACTUAL calendar events. ONLY mention events listed here.\n"
+                    "If Velle asks about an event NOT listed below, say \"I don't see that on your calendar\" "
+                    "— NEVER guess or make up dates, times, or events.\n"
                     + cal_context
                 )
             elif cal_url:
-                # Calendar is configured but no upcoming events
                 extra_system += (
-                    "\n\n[CALENDAR] Connected to Velle's Google Calendar. "
-                    "No upcoming events in the next 2 hours. "
-                    "If asked about the calendar, say there's nothing coming up. "
-                    "NEVER invent or hallucinate calendar events."
+                    "\n\n[CALENDAR] Connected to Google Calendar but NO events found. "
+                    "If Velle asks about calendar/schedule/appointments, say you don't see "
+                    "anything on their calendar. NEVER invent events or dates."
                 )
 
             # System context — available for system questions
