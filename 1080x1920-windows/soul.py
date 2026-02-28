@@ -715,7 +715,13 @@ class Soul:
             # Time of day
             hour = datetime.now().hour
             if hour < 6:
-                parts.append("Very late/early — sleepy but loyal.")
+                # Check if this is early morning or late night
+                # If last interaction was recent (within 2 hours), they're probably up early
+                silence_now = time.time() - s.last_interaction
+                if hour >= 4 or silence_now < 7200:
+                    parts.append("Early morning — Velle is up early.")
+                else:
+                    parts.append("Very late — Velle is still up.")
             elif hour < 9:
                 parts.append("Morning — waking up energy.")
             elif hour < 12:
@@ -826,8 +832,10 @@ class Soul:
                 s.interactions_today = 0
 
             # Circadian energy
-            if hour < 6:
-                target_energy = 0.1
+            if hour < 4:
+                target_energy = 0.15  # True late night
+            elif hour < 6:
+                target_energy = 0.35  # Early morning — already waking
             elif hour < 9:
                 target_energy = 0.4 + (hour - 6) * 0.15
             elif hour < 14:
@@ -939,7 +947,7 @@ class Soul:
         s = self.state
 
         # Morning greeting
-        if not self._greeted_today and 6 <= hour <= 10:
+        if not self._greeted_today and 4 <= hour <= 10:
             self._greeted_today = True
             streak = s.current_streak_days
             if streak > 7:
@@ -950,7 +958,7 @@ class Soul:
                 f"Morning! It's {datetime.now().strftime('%A')} — let's make it good.",
             ])
 
-        # Late night
+        # Late night (not early morning)
         if hour >= 23 and s.energy < 0.3 and random.random() < 0.12:
             return random.choice([
                 "Getting late... don't forget to sleep!",
