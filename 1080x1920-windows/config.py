@@ -112,3 +112,12 @@ class Config:
     news_enabled: bool = True
     news_topic: str = ""                # Empty = top headlines; or "technology", "science", etc.
     news_interval: int = 600            # Fetch every 10 minutes
+
+    # ── Screen Awareness ────────────────────────────────────────────────
+    screen_awareness_enabled: bool = True     # Periodic screenshot → vision LLM
+    screen_awareness_interval: int = 120      # Seconds between captures
+
+    # ── Calendar ────────────────────────────────────────────────────────
+    # Get your ICS URL from Google Calendar:
+    #   Settings → <your calendar> → "Secret address in iCal format"
+    calendar_ics_url: str = ""               # Paste your ICS URL here

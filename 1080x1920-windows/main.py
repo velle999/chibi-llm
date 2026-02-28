@@ -599,6 +599,32 @@ class ChibiAvatarApp:
                     + live_context
                 )
 
+            # Calendar context — available for schedule questions
+            cal_context = self.soul.calendar.get_context()
+            if cal_context:
+                extra_system += (
+                    "\n\n[CALENDAR] Velle's upcoming events. Use when asked about "
+                    "schedule, calendar, meetings, events, or 'what's next'.\n"
+                    + cal_context
+                )
+
+            # System context — available for system questions
+            sys_context = self.soul.system_monitor.get_context()
+            if sys_context:
+                extra_system += (
+                    "\n\n[SYSTEM STATUS] Use when asked about PC, system, CPU, GPU, RAM, "
+                    "or what's running.\n"
+                    + sys_context
+                )
+
+            # Screen awareness — what Velle is looking at
+            if self.soul.state.last_screen_description:
+                extra_system += (
+                    "\n\n[SCREEN] What's currently on Velle's screen. "
+                    "Use when asked what they're doing or if offering help.\n"
+                    + self.soul.state.last_screen_description
+                )
+
             # Soul — mood colors the response style
             mood_context = self.soul.get_mood_context()
             if mood_context:
