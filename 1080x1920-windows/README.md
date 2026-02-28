@@ -1,180 +1,232 @@
-# Chibi-LLM 🐱
+# Chibi-LLM — Windows Edition
 
-A kawaii AI companion that lives on your Raspberry Pi 4. Chibi is a voice-interactive chibi avatar with cat ears, cyberpunk aesthetics, weather awareness, market tracking, webcam vision, persistent memory, and a natural language alarm clock.
+A cyberpunk AI companion with a procedurally animated chibi avatar, powered by a local LLM via Ollama. Features voice I/O, webcam vision, natural language alarms, live weather and market data, and a fully animated neon background — all running on your desktop at 1080×1920 portrait.
 
-**Architecture:** Pi 4 handles display, voice I/O, and webcam. Your PC runs the LLM via Ollama.
+```
+┌─────────────────────────────────────┐
+│          Your Windows PC            │
+│                                     │
+│   Ollama (LLM + Vision models)      │
+│            ▲                        │
+│            │ HTTP localhost          │
+│            ▼                        │
+│   Chibi-LLM (Pygame window)        │
+│   ┌───────────────────────────┐     │
+│   │  Animated background      │     │
+│   │  Parallax stars + geometry│     │
+│   │                           │     │
+│   │      ∧＿∧                 │     │
+│   │     (◕ᴗ◕)  ← Chibi       │     │
+│   │      /つ♡                 │     │
+│   │                           │     │
+│   │  [Chat bubble]            │     │
+│   │  [Weather] [Market ticker]│     │
+│   │  [> Type here...]        │     │
+│   └───────────────────────────┘     │
+└─────────────────────────────────────┘
+```
 
 ## Features
 
-- **Kawaii chibi avatar** — procedurally drawn with Pygame, cat ears, star-pupil eyes, floating hearts/sparkles, expressive animations across 8 states
-- **Voice conversation** — Whisper STT + Piper TTS with a cute pitched-up British voice
-- **Persistent memory** — remembers your name, preferences, and past conversations across restarts
-- **Weather awareness** — live weather with reactive background (rain, snow, lightning effects)
-- **Market dashboard** — scrolling stock/crypto ticker, Fear & Greed index
-- **Webcam vision** — PS3 Eye camera for scene awareness, on-demand "what do you see"
-- **Natural language alarms** — "wake me up at 7am", repeating voice wake-up until dismissed
-- **Cyberpunk HUD** — clock, weather panel, scrolling ticker, camera PiP, neon everything
-- **Ollama & llama.cpp** — works with either backend on your PC
+- **Procedural chibi character** — fully scalable, drawn with Pygame primitives (no sprite sheets)
+- **8 avatar states** — idle, listening, thinking, speaking, happy, confused, sleeping, alarm
+- **Lifelike animations** — breathing, natural blinking, wake-up particle burst, pulsing glow
+- **Cyberpunk HUD** — weather panel, scrolling stock/crypto ticker, neon-styled UI
+- **Animated background** — parallax star field, floating geometry, scrolling grid, light beams
+- **Voice input** — Whisper speech-to-text via sounddevice (Windows compatible)
+- **Voice output** — Piper TTS with pitch shifting for a cute voice
+- **Webcam vision** — PS3 Eye or any USB camera, multimodal scene awareness via Ollama
+- **Natural language alarms** — "wake me up at 7am", snooze, dismiss by voice or keypress
+- **Persistent memory** — remembers facts about you across sessions
+- **Weather-reactive** — rain, snow, lightning effects based on real weather
+- **Market awareness** — LLM can reference live stock/crypto data in conversation
 
 ## Quick Start
 
-### PC Setup (Windows PowerShell)
+### 1. Install Ollama
+
+Download from [ollama.com](https://ollama.com/download) and install.
+
+Pull the models:
 ```powershell
-# Install and serve Ollama
+ollama pull mistral
+ollama pull moondream
+```
+
+Start with network access (needed even locally):
+```powershell
 $env:OLLAMA_HOST="0.0.0.0"; ollama serve
-
-# In another terminal — pull models
-ollama pull mistral        # Chat model
-ollama pull moondream      # Vision model (optional)
 ```
 
-### Pi Setup
-```bash
-git clone <your-repo> chibi-llm
-cd chibi-llm
-bash setup.sh
+### 2. Run Setup
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser Bypass
+.\setup.ps1
 ```
 
-Or manually:
-```bash
-sudo apt update
-sudo apt install -y python3-pygame portaudio19-dev espeak sox libsox-fmt-all alsa-utils
+This installs all Python packages, downloads the Piper voice model, and verifies dependencies.
 
-pip install piper-tts faster-whisper pyaudio yfinance requests opencv-python-headless --break-system-packages
-
-# Download Chibi's voice
-mkdir -p ~/.local/share/piper-voices
-cd ~/.local/share/piper-voices
-wget https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/cori/medium/en_GB-cori-medium.onnx
-wget https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_GB/cori/medium/en_GB-cori-medium.onnx.json
+If `pyaudio` fails (common on Windows), that's fine — we use `sounddevice` instead:
+```powershell
+pip install sounddevice
 ```
 
-### Run
-```bash
-cd chibi-llm
-python3 main.py
+### 3. Configure
+
+Edit `config.py`:
+
+```python
+llm_host = "127.0.0.1"    # localhost since Ollama runs on same machine
+llm_port = 11434           # Ollama default
+llm_model = "mistral"      # Chat model
+weather_city = "Your City" # For weather display
+```
+
+### 4. Launch
+
+```powershell
+python main.py
 ```
 
 ## Controls
 
-| Input | Action |
-|-------|--------|
+| Key | Action |
+|-----|--------|
 | Type + Enter | Send text message |
-| F1 | Toggle microphone |
+| F1 | Toggle microphone on/off |
 | Escape | Quit |
-| Any key during alarm | Dismiss alarm |
+| Any key | Dismiss alarm |
 
-Voice commands work naturally — just talk.
+## Voice Commands
+
+| Say... | Does... |
+|--------|---------|
+| *anything* | Chibi responds with voice + animation |
+| "what do you see" | Captures webcam frame and describes it |
+| "set alarm for 7am" | Sets a wake-up alarm |
+| "wake me up in 30 minutes" | Relative alarm |
+| "list alarms" | Shows active alarms |
+| "cancel alarm" | Removes an alarm |
+| "snooze" / "5 more minutes" | Snoozes a ringing alarm |
+
+## Avatar States
+
+| State | Trigger | Animation |
+|-------|---------|-----------|
+| Idle | Default | Gentle bob, breathing, blinking, cat mouth |
+| Listening | Mic detects speech | Pulsing rings, perked ears |
+| Thinking | Message sent | Floating star dots, looking around |
+| Speaking | LLM response + TTS | Mouth animation, subtle particles |
+| Happy | Response complete | Bouncy, sparkle eyes, arm wave |
+| Confused | Connection error | Wavy mouth, spiral eyes, head tilt |
+| Sleeping | 2 min inactivity | Closed eyes, Zzz, deep breathing |
+| Alarm | Alarm triggers | Rapid bounce, yelling mouth, amber pulse |
 
 ## Project Structure
 
 ```
 chibi-llm/
-├── main.py              # App core, state machine, event loop, draw
-├── config.py            # All settings in one place
-├── sprite_renderer.py   # Kawaii chibi character (procedural)
+├── main.py              # Main app, state machine, UI, animated background
+├── config.py            # All settings (display, LLM, voice, weather, etc.)
 ├── llm_client.py        # Ollama/llama.cpp streaming client
-├── voice_input.py       # Whisper speech-to-text
+├── sprite_renderer.py   # Procedural chibi drawing (fully scalable)
+├── voice_input.py       # Whisper STT via sounddevice
 ├── voice_output.py      # Piper TTS with pitch shifting
-├── data_feeds.py        # Weather + market data fetchers
-├── hud_overlay.py       # Weather panel, scrolling ticker, mini panel
-├── memory.py            # Persistent long-term memory
-├── vision.py            # PS3 Eye webcam + multimodal LLM
+├── vision.py            # Webcam capture + multimodal LLM
 ├── alarm.py             # Natural language alarm system
-├── setup.sh             # One-shot Pi installer
+├── data_feeds.py        # Weather + market data fetchers
+├── hud_overlay.py       # Weather panel + market ticker rendering
+├── memory.py            # Persistent conversation memory
+├── setup.ps1            # Windows setup script
 └── README.md
 ```
 
-## Configuration
+## Configuration Reference
 
-Edit `config.py`. Key settings:
+### Display
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `window_width` | Window width | `1080` |
+| `window_height` | Window height | `1920` |
+| `fullscreen` | Fullscreen mode | `True` |
+| `target_fps` | Frame rate | `30` |
+| `chibi_scale` | Character size multiplier | `2.2` |
+| `scanlines` | CRT scanline overlay | `True` |
 
-### LLM Server
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `llm_host` | `192.168.40.153` | Your PC's IP |
-| `llm_port` | `11434` | Ollama default |
-| `llm_model` | `mistral` | Chat model name |
-| `llm_backend` | `ollama` | `ollama` or `llamacpp` |
+### LLM
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `llm_host` | Ollama server IP | `192.168.40.153` |
+| `llm_port` | Server port | `11434` |
+| `llm_model` | Chat model | `mistral` |
+| `llm_backend` | `"ollama"` or `"llamacpp"` | `"ollama"` |
 
 ### Voice
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `tts_voice` | `en_GB-cori-medium` | Piper voice model |
-| `tts_speed` | `1.1` | Speech rate (higher = faster) |
-| `tts_pitch_semitones` | `2` | Pitch shift (0=natural, 2-3=cute) |
-| `stt_model` | `tiny` | Whisper model size |
-
-### Weather
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `weather_city` | `St. Louis` | Your city |
-| `weather_api_key` | `""` | OWM key (empty = uses wttr.in) |
-| `weather_interval` | `600` | Refresh seconds |
-
-Weather affects the background: rain drops, snowflakes, lightning flashes, dimmed stars on overcast days.
-
-### Markets
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `market_symbols` | S&P, Dow, NASDAQ, AAPL, NVDA | Stock tickers |
-| `crypto_coins` | BTC, ETH, SOL | CoinGecko IDs |
-| `market_interval` | `300` | Refresh seconds |
-| `ticker_scroll_speed` | `60.0` | Scroll px/sec |
-
-All free, no API keys needed (yfinance + CoinGecko + alternative.me).
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `voice_enabled` | Enable voice I/O | `True` |
+| `stt_model` | Whisper model size | `"tiny"` |
+| `tts_voice` | Piper voice model | `"en_GB-cori-medium"` |
+| `tts_speed` | Speech speed | `1.1` |
+| `tts_pitch_semitones` | Pitch shift (requires sox) | `2` |
 
 ### Vision
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `camera_device` | `0` | /dev/video index |
-| `vision_model` | `moondream` | Ollama multimodal model |
-| `vision_awareness_interval` | `60` | Passive capture seconds |
-| `vision_pip` | `True` | Show camera thumbnail |
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `vision_enabled` | Enable webcam | `True` |
+| `camera_device` | Camera index | `0` |
+| `vision_model` | Multimodal model | `"moondream"` |
+| `vision_awareness_interval` | Passive scene check (sec) | `60` |
+| `vision_pip` | Show camera thumbnail | `True` |
 
-Ask Chibi to look: *"what do you see"*, *"how do I look"*, *"read this"*
+### Weather
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `weather_enabled` | Enable weather | `True` |
+| `weather_city` | Your city | `"St. Louis"` |
+| `weather_api_key` | OpenWeatherMap key (optional) | `""` |
+| `weather_interval` | Refresh interval (sec) | `600` |
+
+### Markets
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `market_enabled` | Enable market ticker | `True` |
+| `market_symbols` | Stock symbols | `["^GSPC", "^DJI", "^IXIC", "AAPL", "NVDA"]` |
+| `crypto_coins` | Crypto to track | `["bitcoin", "ethereum", "solana"]` |
+| `market_interval` | Refresh interval (sec) | `300` |
 
 ### Alarm
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `alarm_speak_interval` | `8.0` | Seconds between wake-up messages |
-| `alarm_snooze_minutes` | `5` | Snooze duration |
-
-Set alarms naturally: *"wake me up at 7am"*, *"set alarm for 6:30"*, *"alarm in 30 minutes"*. Dismiss with any keypress or voice. Say *"snooze"* for 5 more minutes.
-
-## Avatar States
-
-| State | Trigger | Visual |
-|-------|---------|--------|
-| IDLE | Default | Gentle bob, cat mouth :3, slow sparkles |
-| LISTENING | Mic active | Pulsing rings, ear wiggle, open mouth |
-| THINKING | Waiting for LLM | Floating star dots, swaying, "o" mouth |
-| SPEAKING | Response streaming | Mouth animation + tongue, particles |
-| HAPPY | Response complete | Bouncy, closed happy eyes, hearts + sparkles, fang smile |
-| CONFUSED | Error | Spiral eyes, wavy mouth |
-| SLEEPING | 2min idle | Tilted head, Zzz, drool, closed eyes |
-| ALARM | Alarm fires | Super bounce, pulsing amber border, wake-up messages |
-
-## Memory
-
-Chibi remembers things across restarts via `~/.chibi-avatar-memory.json`:
-- Auto-extracts facts from conversations (name, preferences, topics)
-- Stores explicit notes ("remember that I like pizza")
-- Conversation summaries
-- Interaction stats (how long you've known each other)
-
-To reset: `rm ~/.chibi-avatar-memory.json`
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `alarm_speak_interval` | Seconds between wake messages | `8.0` |
+| `alarm_snooze_minutes` | Snooze duration | `5` |
 
 ## Troubleshooting
 
-**No sound:** Check `aplay -l` for audio devices. Make sure `alsa-utils` is installed.
+**Chibi can't reach Ollama**
+Make sure Ollama is running with `$env:OLLAMA_HOST="0.0.0.0"; ollama serve`. If running on the same PC, set `llm_host = "127.0.0.1"` in config.py.
 
-**Piper not found:** Run `pip install piper-tts --break-system-packages` or download the binary from [piper releases](https://github.com/rhasspy/piper/releases).
+**No voice input / mic not working**
+Voice init must happen before pygame. This is handled automatically. If you still have issues, check Windows Sound Settings → Input and make sure a mic is selected. Run `python mic_test.py` for diagnostics.
 
-**Camera not detected:** `ls /dev/video*` — PS3 Eye should be video0. Try `camera_device = 1` in config.
+**Voice cuts off on long responses**
+Timeouts are set to 120 seconds. If responses are still cut off, the LLM may be generating very long text — try telling Chibi to keep responses shorter.
 
-**LLM connection failed:** Make sure Ollama is serving on `0.0.0.0`: `$env:OLLAMA_HOST="0.0.0.0"; ollama serve`
+**Piper TTS not found**
+Run `setup.ps1` to download the voice model, or manually install: `pip install piper-tts`. The voice model downloads to `%USERPROFILE%\.local\share\piper-voices\`.
 
-**Voice feedback loop:** Should be fixed — mic pauses during TTS. If it still happens, lower mic sensitivity or increase the physical distance between speaker and mic.
+**Sox not found (pitch shifting)**
+Voice works without sox — just no pitch shift. Install sox from [sourceforge.net/projects/sox](https://sourceforge.net/projects/sox/) and add it to your PATH.
 
-**Old memory causing issues:** `rm ~/.chibi-avatar-memory.json` for a fresh start.
+**Camera not working**
+Set `vision_enabled = False` in config.py to disable. If you have a webcam, make sure it's not being used by another app. Try changing `camera_device` to `1` if you have multiple cameras.
+
+**Window is too big / wrong resolution**
+Change `window_width` and `window_height` in config.py. Set `fullscreen = False` for windowed mode. Adjust `chibi_scale` to resize the character.
+
+**Memory reset**
+Delete `~/.chibi-memory.json` to clear Chibi's memories of past conversations.
+
+**Alarm won't dismiss**
+Press any key or say anything while the alarm is ringing. Alarms auto-dismiss after 10 minutes.
