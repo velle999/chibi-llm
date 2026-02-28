@@ -169,7 +169,7 @@ class SystemMonitor:
         # CPU + RAM
         try:
             import psutil
-            stats["cpu_percent"] = psutil.cpu_percent(interval=0.5)
+            stats["cpu_percent"] = psutil.cpu_percent(interval=None)  # Non-blocking
             mem = psutil.virtual_memory()
             stats["ram_percent"] = mem.percent
             stats["ram_used_gb"] = mem.used / (1024 ** 3)
@@ -737,19 +737,10 @@ class Soul:
             else:
                 parts.append("Late night — keeping Velle company.")
 
-            # System context
+            # System context (keep in mood for subtle awareness)
             sys_ctx = self.system_monitor.get_context()
             if sys_ctx:
                 parts.append(f"[SYSTEM] {sys_ctx}")
-
-            # Screen awareness
-            if s.last_screen_description:
-                parts.append(f"[SCREEN] Last saw: {s.last_screen_description[:100]}")
-
-            # Calendar
-            cal_ctx = self.calendar.get_context()
-            if cal_ctx:
-                parts.append(f"[CALENDAR] {cal_ctx}")
 
             if s.recent_events:
                 recent = s.recent_events[-3:]
@@ -822,6 +813,31 @@ class Soul:
         hour = datetime.now().hour
         today = datetime.now().date()
 
+        # ── Slow I/O — outside lock ──────────────────────────────────
+        # These can take seconds, must not block get_mood_context()
+
+        # Screen capture (can take 10-30s for vision model)
+        screen_desc = None
+        try:
+            screen_desc = self.screen_capture.maybe_capture()
+        except Exception as e:
+            print(f"[Soul] Screen capture error: {e}")
+
+        # System stats (cpu_percent blocks 0.5s)
+        sys_stats = {}
+        try:
+            sys_stats = self.system_monitor.get_stats()
+        except Exception as e:
+            print(f"[Soul] System monitor error: {e}")
+
+        # Calendar check
+        cal_reminders = []
+        try:
+            cal_reminders = self.calendar.get_reminders()
+        except Exception as e:
+            print(f"[Soul] Calendar error: {e}")
+
+        # ── Fast state updates — inside lock ─────────────────────────
         with self._lock:
             s = self.state
 
@@ -833,9 +849,9 @@ class Soul:
 
             # Circadian energy
             if hour < 4:
-                target_energy = 0.15  # True late night
+                target_energy = 0.15
             elif hour < 6:
-                target_energy = 0.35  # Early morning — already waking
+                target_energy = 0.35
             elif hour < 9:
                 target_energy = 0.4 + (hour - 6) * 0.15
             elif hour < 14:
@@ -866,53 +882,42 @@ class Soul:
             # Mood calculation
             s.mood = self._calculate_mood()
 
-            # ── Screen awareness ──────────────────────────────────────
-            screen_desc = self.screen_capture.maybe_capture()
+            # ── Apply slow I/O results ────────────────────────────────
             if screen_desc:
                 s.last_screen_description = screen_desc
-
-                # Detect long sessions in same app
-                sys_stats = self.system_monitor.get_stats()
                 active = sys_stats.get("active_window", "")
                 if active and active != s.last_active_app:
                     s.last_active_app = active
                     s.active_app_start = now
-                elif active and (now - s.active_app_start) > 7200:  # 2 hours
+                elif active and s.active_app_start and (now - s.active_app_start) > 7200:
                     app_name = active.split(" - ")[-1] if " - " in active else active[:30]
                     self._queue_impulse(
                         f"You've been in {app_name} for over 2 hours. Maybe take a quick break?"
                     )
-                    s.active_app_start = now  # Reset so we don't spam
+                    s.active_app_start = now
 
-            # ── System health alerts ──────────────────────────────────
-            sys_stats = self.system_monitor.get_stats()
+            # System health alerts
             gpu_temp = sys_stats.get("gpu_temp")
             if gpu_temp and gpu_temp > 85:
                 self._queue_impulse(
-                    f"Your GPU is running at {gpu_temp}°C — that's pretty hot! Everything okay?"
+                    f"Your GPU is running at {gpu_temp}°C — pretty hot! Everything okay?"
                 )
-
             cpu = sys_stats.get("cpu_percent", 0)
             if cpu > 90:
-                self._queue_impulse(
-                    f"CPU is at {cpu:.0f}%! Something heavy running?"
-                )
+                self._queue_impulse(f"CPU is at {cpu:.0f}%! Something heavy running?")
 
-            # ── Calendar reminders ────────────────────────────────────
-            reminders = self.calendar.get_reminders()
-            for r in reminders:
+            # Calendar reminders
+            for r in cal_reminders:
                 self._queue_impulse(r)
 
-            # ── Impulses ──────────────────────────────────────────────
+            # Impulses
             time_since_impulse = now - s.last_impulse
-            min_gap = 120
-
-            if time_since_impulse > min_gap:
+            if time_since_impulse > 120:
                 impulse = self._maybe_generate_impulse(silence, hour)
                 if impulse:
                     self._queue_impulse(impulse)
 
-        # Auto-save periodically
+        # Auto-save periodically (outside lock)
         if random.random() < 0.05:
             self.save()
 

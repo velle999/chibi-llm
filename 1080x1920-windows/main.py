@@ -600,12 +600,21 @@ class ChibiAvatarApp:
                 )
 
             # Calendar context — available for schedule questions
+            cal_url = getattr(self.config, 'calendar_ics_url', '')
             cal_context = self.soul.calendar.get_context()
             if cal_context:
                 extra_system += (
-                    "\n\n[CALENDAR] Velle's upcoming events. Use when asked about "
-                    "schedule, calendar, meetings, events, or 'what's next'.\n"
+                    "\n\n[CALENDAR] Velle's upcoming events (from Google Calendar). "
+                    "ONLY reference these EXACT events. NEVER invent or guess events.\n"
                     + cal_context
+                )
+            elif cal_url:
+                # Calendar is configured but no upcoming events
+                extra_system += (
+                    "\n\n[CALENDAR] Connected to Velle's Google Calendar. "
+                    "No upcoming events in the next 2 hours. "
+                    "If asked about the calendar, say there's nothing coming up. "
+                    "NEVER invent or hallucinate calendar events."
                 )
 
             # System context — available for system questions
@@ -815,26 +824,26 @@ class ChibiAvatarApp:
                 # Wake up if sleeping
                 if self.state == AvatarState.SLEEPING:
                     self.set_state(AvatarState.IDLE)
-                    self.last_interaction = time.time()
 
-                # Display the thought
+                # Display the thought and speak it
                 self.bubble.set_text(impulse)
                 self.set_state(AvatarState.SPEAKING)
-
-                # Speak it
                 if self.voice_out:
                     self.voice_out.speak(impulse)
-                    # Brief pause to let TTS start
-                    time.sleep(0.3)
 
                 # Add to conversation so LLM has context
                 self.conversation.append({"role": "assistant", "content": impulse})
                 self.last_interaction = time.time()
 
-                # Go back to idle after a moment
-                time.sleep(2.0)
-                if not self.is_generating:
+                # Set a timer to return to idle (non-blocking)
+                self._impulse_idle_time = time.time() + 4.0
+
+        # Return to idle after impulse display time
+        if hasattr(self, '_impulse_idle_time') and self._impulse_idle_time > 0:
+            if time.time() > self._impulse_idle_time and not self.is_generating:
+                if self.state == AvatarState.SPEAKING:
                     self.set_state(AvatarState.IDLE)
+                self._impulse_idle_time = 0
 
         # Auto-sleep after inactivity
         if (self.state == AvatarState.IDLE and
