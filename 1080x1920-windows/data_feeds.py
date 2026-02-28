@@ -190,7 +190,7 @@ def fetch_weather_wttr(city: str) -> WeatherData:
         url = f"https://wttr.in/{urllib.request.quote(city)}?format=j1"
         req = urllib.request.Request(url, method="GET")
         req.add_header("User-Agent", "chibi-avatar/1.0")
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=8) as resp:
             j = json.loads(resp.read().decode())
 
         current = j.get("current_condition", [{}])[0]
@@ -212,6 +212,128 @@ def fetch_weather_wttr(city: str) -> WeatherData:
         print(f"[Weather] wttr.in error: {e}")
 
     return data
+
+
+# City → lat/lon lookup for Open-Meteo (add your city here)
+_CITY_COORDS = {
+    "st. louis": (38.63, -90.20),
+    "st louis": (38.63, -90.20),
+    "new york": (40.71, -74.01),
+    "los angeles": (34.05, -118.24),
+    "chicago": (41.88, -87.63),
+    "houston": (29.76, -95.37),
+    "phoenix": (33.45, -112.07),
+    "san francisco": (37.77, -122.42),
+    "seattle": (47.61, -122.33),
+    "denver": (39.74, -104.99),
+    "miami": (25.76, -80.19),
+    "dallas": (32.78, -96.80),
+    "london": (51.51, -0.13),
+    "tokyo": (35.68, 139.69),
+}
+
+
+def fetch_weather_openmeteo(city: str) -> WeatherData:
+    """Fetch weather from Open-Meteo (free, no key, very reliable)."""
+    data = WeatherData()
+    try:
+        coords = _CITY_COORDS.get(city.lower())
+        if not coords:
+            # Try geocoding
+            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.request.quote(city)}&count=1"
+            req = urllib.request.Request(geo_url)
+            req.add_header("User-Agent", "chibi-llm/1.0")
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                geo = json.loads(resp.read().decode())
+            results = geo.get("results", [])
+            if not results:
+                print(f"[Weather] Open-Meteo: city '{city}' not found")
+                return data
+            coords = (results[0]["latitude"], results[0]["longitude"])
+            # Cache it
+            _CITY_COORDS[city.lower()] = coords
+
+        lat, lon = coords
+        url = (
+            f"https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lat}&longitude={lon}"
+            f"&current=temperature_2m,relative_humidity_2m,apparent_temperature,"
+            f"weather_code,wind_speed_10m"
+            f"&temperature_unit=fahrenheit&wind_speed_unit=mph"
+            f"&daily=sunrise,sunset&timezone=auto&forecast_days=1"
+        )
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "chibi-llm/1.0")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            j = json.loads(resp.read().decode())
+
+        current = j.get("current", {})
+        data.city = city
+        data.temperature = float(current.get("temperature_2m", 0))
+        data.feels_like = float(current.get("apparent_temperature", 0))
+        data.humidity = int(current.get("relative_humidity_2m", 0))
+        data.wind_speed = float(current.get("wind_speed_10m", 0))
+
+        wmo_code = current.get("weather_code", 0)
+        data.condition = _map_wmo_condition(wmo_code)
+        data.description = _wmo_description(wmo_code)
+        data.updated_at = datetime.now().strftime("%H:%M")
+
+        daily = j.get("daily", {})
+        if daily.get("sunrise"):
+            try:
+                sr = datetime.fromisoformat(daily["sunrise"][0])
+                data.sunrise = sr.strftime("%I:%M %p")
+            except Exception:
+                pass
+        if daily.get("sunset"):
+            try:
+                ss = datetime.fromisoformat(daily["sunset"][0])
+                data.sunset = ss.strftime("%I:%M %p")
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"[Weather] Open-Meteo error: {e}")
+
+    return data
+
+
+def _map_wmo_condition(code: int) -> str:
+    """Map WMO weather codes to simple conditions."""
+    if code == 0:
+        return "clear"
+    elif code in (1, 2, 3):
+        return "clouds"
+    elif code in (45, 48):
+        return "fog"
+    elif code in (51, 53, 55, 56, 57):
+        return "drizzle"
+    elif code in (61, 63, 65, 66, 67, 80, 81, 82):
+        return "rain"
+    elif code in (71, 73, 75, 77, 85, 86):
+        return "snow"
+    elif code in (95, 96, 99):
+        return "storm"
+    return "unknown"
+
+
+def _wmo_description(code: int) -> str:
+    """Human-readable WMO weather description."""
+    descriptions = {
+        0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast",
+        45: "foggy", 48: "depositing rime fog",
+        51: "light drizzle", 53: "moderate drizzle", 55: "dense drizzle",
+        56: "light freezing drizzle", 57: "dense freezing drizzle",
+        61: "slight rain", 63: "moderate rain", 65: "heavy rain",
+        66: "light freezing rain", 67: "heavy freezing rain",
+        71: "slight snowfall", 73: "moderate snowfall", 75: "heavy snowfall",
+        77: "snow grains", 80: "slight rain showers", 81: "moderate rain showers",
+        82: "violent rain showers", 85: "slight snow showers", 86: "heavy snow showers",
+        95: "thunderstorm", 96: "thunderstorm with slight hail",
+        99: "thunderstorm with heavy hail",
+    }
+    return descriptions.get(code, "unknown")
 
 
 def _map_wttr_condition(code: str) -> str:
@@ -441,20 +563,32 @@ class DataFeedManager:
             t.start()
 
     def _weather_loop(self):
-        """Fetch weather periodically."""
+        """Fetch weather periodically with fallback chain."""
         while self._running:
+            data = None
             try:
                 if self.config.weather_api_key:
                     data = fetch_weather_owm(
                         self.config.weather_api_key,
                         self.config.weather_city,
                     )
-                else:
+
+                # Try wttr.in first (if no OWM key or OWM failed)
+                if not data or not data.description:
                     data = fetch_weather_wttr(self.config.weather_city)
 
-                with self._lock:
-                    self.weather = data
-                print(f"[Weather] Updated: {data.description}, {data.temperature:.0f}°F")
+                # Fallback to Open-Meteo if wttr.in failed
+                if not data or not data.description:
+                    print("[Weather] wttr.in failed, trying Open-Meteo...")
+                    data = fetch_weather_openmeteo(self.config.weather_city)
+
+                # Only update if we got valid data
+                if data and data.description:
+                    with self._lock:
+                        self.weather = data
+                    print(f"[Weather] Updated: {data.description}, {data.temperature:.0f}°F")
+                else:
+                    print("[Weather] All sources failed, keeping previous data")
 
             except Exception as e:
                 print(f"[Weather] Feed error: {e}")
