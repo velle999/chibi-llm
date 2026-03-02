@@ -604,47 +604,56 @@ class ChibiAvatarApp:
             cal_context = self.soul.calendar.get_context()
             if cal_context:
                 extra_system += (
-                    "\n\n[CALENDAR — REAL DATA FROM GOOGLE CALENDAR]\n"
-                    "These are Velle's ACTUAL calendar events. ONLY mention events listed here.\n"
-                    "If Velle asks about an event NOT listed below, say \"I don't see that on your calendar\" "
-                    "— NEVER guess or make up dates, times, or events.\n"
-                    + cal_context
+                    "\n\n=== REAL CALENDAR (from Google Calendar ICS) ===\n"
+                    "These are Velle's ACTUAL events. ONLY mention events listed here.\n"
+                    "If asked about something NOT listed, say \"I don't see that on your calendar.\"\n"
+                    "DO NOT INVENT EVENTS OR DATES.\n"
+                    + cal_context + "\n"
+                    "=== END REAL CALENDAR ==="
                 )
             elif cal_url:
                 extra_system += (
-                    "\n\n[CALENDAR] Connected to Google Calendar but NO events found. "
-                    "If Velle asks about calendar/schedule/appointments, say you don't see "
-                    "anything on their calendar. NEVER invent events or dates."
+                    "\n\n=== REAL CALENDAR ===\n"
+                    "Connected to Google Calendar. NO events found.\n"
+                    "If asked about calendar, say: \"I don't see anything on your calendar.\"\n"
+                    "DO NOT INVENT EVENTS OR DATES.\n"
+                    "=== END REAL CALENDAR ==="
                 )
 
             # System context — available for system questions
             sys_context = self.soul.system_monitor.get_context()
             if sys_context:
                 extra_system += (
-                    "\n\n[SYSTEM STATUS — REAL DATA FROM THIS PC]\n"
-                    "ONLY report these exact numbers. NEVER guess or invent specs.\n"
-                    + sys_context
+                    "\n\n=== REAL PC STATS (from psutil + nvidia-smi) ===\n"
+                    "ONLY quote these exact numbers. DO NOT invent or change them.\n"
+                    + sys_context + "\n"
+                    "=== END REAL PC STATS ==="
                 )
             else:
                 extra_system += (
-                    "\n\n[SYSTEM STATUS] System monitoring is not available "
-                    "(psutil not installed). If Velle asks about PC stats, tell them "
-                    "you can't see system info right now and suggest: pip install psutil. "
-                    "NEVER guess or make up CPU%, RAM%, GPU temp, or specs."
+                    "\n\n=== REAL PC STATS ===\n"
+                    "NOT AVAILABLE. psutil is not working.\n"
+                    "If Velle asks about PC/system/specs, say: "
+                    "\"I can't see your system stats right now — try pip install psutil\"\n"
+                    "DO NOT GUESS. DO NOT MAKE UP NUMBERS.\n"
+                    "=== END REAL PC STATS ==="
                 )
 
             # Screen awareness — what Velle is looking at
             if self.soul.state.last_screen_description:
                 extra_system += (
-                    "\n\n[SCREEN — WHAT'S ON VELLE'S SCREEN RIGHT NOW]\n"
-                    "ONLY describe what's listed here. NEVER invent screen contents.\n"
-                    + self.soul.state.last_screen_description
+                    "\n\n=== REAL SCREEN CONTENT ===\n"
+                    "ONLY describe what's written here. DO NOT invent screen contents.\n"
+                    + self.soul.state.last_screen_description + "\n"
+                    "=== END REAL SCREEN CONTENT ==="
                 )
             else:
                 extra_system += (
-                    "\n\n[SCREEN] Screen awareness is not active. "
-                    "If Velle asks what's on their screen, say you can't see it right now. "
-                    "NEVER guess what's on the screen."
+                    "\n\n=== REAL SCREEN CONTENT ===\n"
+                    "NOT AVAILABLE. Screen capture is not active.\n"
+                    "If asked what's on screen, say: \"I can't see your screen right now\"\n"
+                    "DO NOT GUESS.\n"
+                    "=== END REAL SCREEN CONTENT ==="
                 )
 
             # Soul — mood colors the response style

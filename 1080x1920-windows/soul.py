@@ -147,12 +147,72 @@ class SystemMonitor:
     def __init__(self):
         self._last_check = 0
         self._cache = {}
-        self._check_interval = 30  # seconds
+        self._check_interval = 30
+        self._specs = None  # Static hardware info, fetched once
+
+    def _get_specs(self) -> dict:
+        """Get static hardware specs (only runs once)."""
+        if self._specs is not None:
+            return self._specs
+
+        specs = {
+            "cpu_name": "",
+            "cpu_cores": 0,
+            "ram_total_gb": 0,
+            "gpu_name": "",
+            "gpu_vram_mb": 0,
+        }
+
+        try:
+            import psutil
+            specs["cpu_cores"] = psutil.cpu_count(logical=True)
+            specs["ram_total_gb"] = round(psutil.virtual_memory().total / (1024 ** 3), 1)
+        except ImportError:
+            pass
+
+        # CPU name
+        if platform.system() == "Windows":
+            try:
+                import winreg
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                     r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+                specs["cpu_name"] = winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
+                winreg.CloseKey(key)
+            except Exception:
+                pass
+        else:
+            try:
+                with open("/proc/cpuinfo") as f:
+                    for line in f:
+                        if "model name" in line:
+                            specs["cpu_name"] = line.split(":")[1].strip()
+                            break
+            except Exception:
+                pass
+
+        # GPU name + VRAM
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                parts = result.stdout.strip().split(",")
+                if len(parts) >= 2:
+                    specs["gpu_name"] = parts[0].strip()
+                    specs["gpu_vram_mb"] = int(parts[1].strip())
+        except Exception:
+            pass
+
+        self._specs = specs
+        return specs
 
     def get_stats(self) -> dict:
         """Returns system stats. Caches for 30s."""
         now = time.time()
-        if now - self._last_check < self._check_interval:
+        if now - self._last_check < self._check_interval and self._cache:
             return self._cache
 
         stats = {
@@ -169,7 +229,11 @@ class SystemMonitor:
         # CPU + RAM
         try:
             import psutil
-            stats["cpu_percent"] = psutil.cpu_percent(interval=None)  # Non-blocking
+            # Use interval=1 on first call for accurate reading, None after
+            if self._last_check == 0:
+                stats["cpu_percent"] = psutil.cpu_percent(interval=1)
+            else:
+                stats["cpu_percent"] = psutil.cpu_percent(interval=None)
             mem = psutil.virtual_memory()
             stats["ram_percent"] = mem.percent
             stats["ram_used_gb"] = mem.used / (1024 ** 3)
@@ -178,8 +242,9 @@ class SystemMonitor:
             procs = []
             for p in psutil.process_iter(["name", "cpu_percent"]):
                 try:
-                    if p.info["cpu_percent"] and p.info["cpu_percent"] > 1:
-                        procs.append((p.info["name"], p.info["cpu_percent"]))
+                    cpu = p.info.get("cpu_percent") or 0
+                    if cpu > 1:
+                        procs.append((p.info["name"], cpu))
                 except Exception:
                     pass
             procs.sort(key=lambda x: x[1], reverse=True)
@@ -222,20 +287,30 @@ class SystemMonitor:
 
     def get_context(self) -> str:
         """System state as a string for LLM context."""
+        specs = self._get_specs()
         s = self.get_stats()
         parts = []
 
-        if s["cpu_percent"]:
-            parts.append(f"CPU: {s['cpu_percent']:.0f}%")
+        # Hardware specs (always show)
+        if specs["cpu_name"]:
+            parts.append(f"CPU: {specs['cpu_name']} ({specs['cpu_cores']} threads)")
+        if specs["ram_total_gb"]:
+            parts.append(f"Total RAM: {specs['ram_total_gb']}GB")
+        if specs["gpu_name"]:
+            vram = f", {specs['gpu_vram_mb']}MB VRAM" if specs["gpu_vram_mb"] else ""
+            parts.append(f"GPU: {specs['gpu_name']}{vram}")
+
+        # Live stats
+        parts.append(f"CPU usage: {s['cpu_percent']:.0f}%")
         if s["ram_percent"]:
-            parts.append(f"RAM: {s['ram_percent']:.0f}% ({s['ram_used_gb']:.1f}GB)")
+            parts.append(f"RAM usage: {s['ram_percent']:.0f}% ({s['ram_used_gb']:.1f}GB used)")
         if s["gpu_temp"] is not None:
-            parts.append(f"GPU: {s['gpu_temp']}°C, {s['gpu_percent']}% util")
+            parts.append(f"GPU temp: {s['gpu_temp']}°C, utilization: {s['gpu_percent']}%")
         if s["active_window"]:
-            parts.append(f"Active window: {s['active_window'][:60]}")
+            parts.append(f"Active window: {s['active_window'][:80]}")
         if s["top_processes"]:
             top = ", ".join(f"{n}({c:.0f}%)" for n, c in s["top_processes"][:3])
-            parts.append(f"Top procs: {top}")
+            parts.append(f"Top processes: {top}")
 
         return "; ".join(parts) if parts else ""
 
