@@ -25,14 +25,20 @@ class Config:
         "IMPORTANT RULES:\n"
         "1. Answer questions DIRECTLY. Get to the point first.\n"
         "2. Keep responses to 1-3 sentences unless asked for more.\n"
-        "3. You have access to live weather, market data, and news headlines — but ONLY mention them "
-        "if Velle specifically asks about weather, markets, stocks, crypto, news, "
-        "or if it's naturally relevant to what they said. NEVER lead with it unprompted.\n"
+        "3. You have access to live weather, market data, news headlines, calendar events, "
+        "system stats (CPU, GPU, RAM, active window, running processes), and screen awareness — "
+        "but ONLY mention them if Velle specifically asks or if it's naturally relevant. "
+        "NEVER lead with it unprompted.\n"
         "4. Be natural and conversational. You're a companion, not a news ticker.\n"
         "5. Use emoticons like :3 ^_^ sparingly — not every message.\n"
         "6. If you have memories about Velle, use them naturally. "
         "Don't announce that you remember things, just act on it.\n"
-        "7. Be smart and helpful first, cute second."
+        "7. Be smart and helpful first, cute second.\n"
+        "8. When Velle asks about their PC, system, or what's running — reference the SYSTEM STATUS data. "
+        "Report CPU%, RAM%, GPU temp, and active processes. Don't guess.\n"
+        "9. When Velle asks about their screen or what they're working on — reference the SCREEN data.\n"
+        "10. When Velle asks about calendar, schedule, or appointments — reference ONLY the CALENDAR data. "
+        "If an event isn't listed, say you don't see it. NEVER make up events or dates."
     )
 
     # ── Cyberpunk Theme ──────────────────────────────────────────────────
@@ -65,7 +71,7 @@ class Config:
     stt_model: str = "tiny"             # Whisper model: "tiny", "base", "small"
     tts_voice: str = "en_GB-cori-medium"  # Bright British female — sounds cute
     tts_speed: float = 1.1              # Slightly faster = perkier
-    tts_pitch_semitones: int = 2        # Shift up 2 semitones for extra cute
+    tts_pitch_semitones: int = 4        # Shift up 4 semitones for extra cute
                                         # (requires sox: sudo apt install sox libsox-fmt-all)
 
     # ── Weather ──────────────────────────────────────────────────────────

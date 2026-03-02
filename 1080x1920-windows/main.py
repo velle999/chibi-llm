@@ -621,17 +621,30 @@ class ChibiAvatarApp:
             sys_context = self.soul.system_monitor.get_context()
             if sys_context:
                 extra_system += (
-                    "\n\n[SYSTEM STATUS] Use when asked about PC, system, CPU, GPU, RAM, "
-                    "or what's running.\n"
+                    "\n\n[SYSTEM STATUS — REAL DATA FROM THIS PC]\n"
+                    "ONLY report these exact numbers. NEVER guess or invent specs.\n"
                     + sys_context
+                )
+            else:
+                extra_system += (
+                    "\n\n[SYSTEM STATUS] System monitoring is not available "
+                    "(psutil not installed). If Velle asks about PC stats, tell them "
+                    "you can't see system info right now and suggest: pip install psutil. "
+                    "NEVER guess or make up CPU%, RAM%, GPU temp, or specs."
                 )
 
             # Screen awareness — what Velle is looking at
             if self.soul.state.last_screen_description:
                 extra_system += (
-                    "\n\n[SCREEN] What's currently on Velle's screen. "
-                    "Use when asked what they're doing or if offering help.\n"
+                    "\n\n[SCREEN — WHAT'S ON VELLE'S SCREEN RIGHT NOW]\n"
+                    "ONLY describe what's listed here. NEVER invent screen contents.\n"
                     + self.soul.state.last_screen_description
+                )
+            else:
+                extra_system += (
+                    "\n\n[SCREEN] Screen awareness is not active. "
+                    "If Velle asks what's on their screen, say you can't see it right now. "
+                    "NEVER guess what's on the screen."
                 )
 
             # Soul — mood colors the response style
