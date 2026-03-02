@@ -224,9 +224,10 @@ class SystemMonitor:
             "gpu_mem_percent": None,
             "active_window": "",
             "top_processes": [],
+            "uptime": "",
         }
 
-        # CPU + RAM
+        # CPU + RAM + Uptime
         try:
             import psutil
             # Use interval=1 on first call for accurate reading, None after
@@ -234,6 +235,22 @@ class SystemMonitor:
                 stats["cpu_percent"] = psutil.cpu_percent(interval=1)
             else:
                 stats["cpu_percent"] = psutil.cpu_percent(interval=None)
+            mem = psutil.virtual_memory()
+            stats["ram_percent"] = mem.percent
+            stats["ram_used_gb"] = mem.used / (1024 ** 3)
+
+            # Uptime
+            boot = datetime.fromtimestamp(psutil.boot_time())
+            delta = datetime.now() - boot
+            days = delta.days
+            hours, rem = divmod(delta.seconds, 3600)
+            mins = rem // 60
+            if days > 0:
+                stats["uptime"] = f"{days}d {hours}h {mins}m"
+            elif hours > 0:
+                stats["uptime"] = f"{hours}h {mins}m"
+            else:
+                stats["uptime"] = f"{mins}m"
             mem = psutil.virtual_memory()
             stats["ram_percent"] = mem.percent
             stats["ram_used_gb"] = mem.used / (1024 ** 3)
@@ -301,6 +318,8 @@ class SystemMonitor:
             parts.append(f"GPU: {specs['gpu_name']}{vram}")
 
         # Live stats
+        if s["uptime"]:
+            parts.append(f"System uptime: {s['uptime']}")
         parts.append(f"CPU usage: {s['cpu_percent']:.0f}%")
         if s["ram_percent"]:
             parts.append(f"RAM usage: {s['ram_percent']:.0f}% ({s['ram_used_gb']:.1f}GB used)")
