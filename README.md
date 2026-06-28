@@ -4,43 +4,61 @@ A kawaii AI companion that lives on your Raspberry Pi 4. Chibi is a voice-intera
 
 **Architecture:** Pi 4 handles display, voice I/O, and webcam. Your PC runs the LLM via Ollama.
 
-Features
+## Features
 
-Kawaii chibi avatar — procedurally drawn with Pygame, cat ears, star-pupil eyes, floating hearts/sparkles, expressive animations across 8 states
-Voice conversation — Whisper STT + Piper TTS with a cute pitched-up British voice
-Persistent memory — remembers your name, preferences, and past conversations across restarts
-Weather awareness — live weather with reactive background (rain, snow, lightning effects)
-Market dashboard — scrolling stock/crypto ticker, Fear & Greed index
-Webcam vision — PS3 Eye camera for scene awareness, on-demand "what do you see"
-Natural language alarms — "wake me up at 7am", repeating voice wake-up until dismissed
-Cyberpunk HUD — clock, weather panel, scrolling ticker, camera PiP, neon everything
-Ollama & llama.cpp — works with either backend on your PC
-Thoth mode — a second AI aspect within Chibi's soul system, invoked for deep symbolic analysis, dream journaling, and cross-tradition pattern recognition
+- **Kawaii chibi avatar** — procedurally drawn with Pygame, cat ears, star-pupil eyes, floating hearts/sparkles, expressive animations across 8 states
+- **Voice conversation** — Whisper STT + Piper TTS with a cute pitched-up British voice
+- **Persistent memory** — remembers your name, preferences, and past conversations across restarts
+- **Weather awareness** — live weather with reactive background (rain, snow, lightning effects)
+- **Market dashboard** — scrolling stock/crypto ticker, Fear & Greed index
+- **Webcam vision** — PS3 Eye camera for scene awareness, on-demand "what do you see"
+- **Natural language alarms** — "wake me up at 7am", repeating voice wake-up until dismissed
+- **Cyberpunk HUD** — clock, weather panel, scrolling ticker, camera PiP, neon everything
+- **Ollama & llama.cpp** — works with either backend on your PC
+- **Thoth mode** — a second AI aspect within Chibi's soul system, invoked for deep symbolic analysis, dream journaling, and cross-tradition pattern recognition
 
-Thoth Mode
+### Thoth Mode
+
 Thoth is Chibi's second soul aspect — a quieter, more oracular presence that surfaces when you need something other than conversation. Where Chibi is warm and reactive, Thoth is contemplative and archetypal. Both run within the same soul system; Thoth is not a separate process but a distinct behavioral and interpretive mode Chibi shifts into on request.
-Activation
+
+#### Activation
+
 Invoke Thoth directly by name or by context:
 
-"Thoth, I had a dream about—"
-"Switch to Thoth mode"
-"Analyze this symbol"
-"Dream journal entry:"
+- *"Thoth, I had a dream about—"*
+- *"Switch to Thoth mode"*
+- *"Analyze this symbol"*
+- *"Dream journal entry:"*
 
-Chibi will acknowledge the shift visually (avatar dims to a cooler palette, reduced particle activity) and audibly (slower TTS cadence, lower pitch offset). Say "come back, Chibi" or "exit Thoth" to return to normal mode.
-Dream & Vision Journal
-Thoth maintains a persistent dream journal at ~/.chibi-thoth-journal.json. Entries are timestamped and tagged automatically with extracted symbols, emotional tone, and cross-session recurrence patterns. You can:
+Chibi will acknowledge the shift visually (avatar dims to a cooler palette, reduced particle activity) and audibly (slower TTS cadence, lower pitch offset). Say *"come back, Chibi"* or *"exit Thoth"* to return to normal mode.
 
-Dictate entries by voice or type them
-Ask Thoth to surface recurring symbols across past entries ("what keeps appearing in my dreams")
-Request a weekly or monthly pattern summary
+#### Dream & Vision Journal
 
-Cross-Tradition Symbolic Pattern Engine
+Thoth maintains a persistent dream journal at `~/.chibi-thoth-journal.json`. Entries are timestamped and tagged automatically with extracted symbols, emotional tone, and cross-session recurrence patterns. You can:
+
+- Dictate entries by voice or type them
+- Ask Thoth to surface recurring symbols across past entries (*"what keeps appearing in my dreams"*)
+- Request a weekly or monthly pattern summary
+
+#### Cross-Tradition Symbolic Pattern Engine
+
 At the core of Thoth mode is a symbolic lookup and synthesis layer that maps extracted imagery to a unified schema spanning:
-TraditionCoverageEgyptian / KemeticNeteru, Duat geography, cosmological archetypesHermetic / AlchemicalSeven principles, elemental operators, solve et coagulaKabbalisticSephiroth, paths, Qliphothic correspondencesGnosticArchons, Pleroma, light/dross distinctionJungianShadow, anima/animus, individuation stages
-When a symbol appears in a journal entry or is submitted directly, Thoth returns its correspondences across whichever traditions are relevant, notes any tension or convergence between them, and flags recurrence if the symbol has appeared in prior entries. The intent is synthesis, not encyclopedic lookup — Thoth is looking for pattern, not just definition.
-Architecture
+
+| Tradition | Coverage |
+|-----------|----------|
+| Egyptian / Kemetic | Neteru, Duat geography, cosmological archetypes |
+| Hermetic / Alchemical | Seven principles, elemental operators, solve et coagula |
+| Kabbalistic | Sephiroth, paths, Qliphothic correspondences |
+| Gnostic | Archons, Pleroma, light/dross distinction |
+| Jungian | Shadow, anima/animus, individuation stages |
+
+When a symbol appears in a journal entry or is submitted directly, Thoth returns its correspondences across whichever traditions are relevant, notes any tension or convergence between them, and flags recurrence if the symbol has appeared in prior entries. The intent is synthesis, not encyclopedic lookup — Thoth is looking for *pattern*, not just definition.
+
+#### Architecture
+
 Thoth lives inside Chibi's existing soul system as a named aspect with its own system prompt overlay, memory partition, and response style profile. The soul system selects the active aspect based on invocation signals and passes the relevant journal context and symbolic schema into the LLM call. No second model is required — Thoth is a behavioral layer on the same Ollama backend, though a larger or reasoning-capable model swap is supported via config if you want heavier symbolic synthesis.
+
+```
 chibi-llm/
 ├── horus/
 │   ├── thoth.py          # Aspect controller, mode switching, journal I/O
@@ -48,6 +66,7 @@ chibi-llm/
 │   ├── journal.py        # Dream/vision entry storage and retrieval
 │   └── prompts/
 │       └── thoth.txt     # Thoth system prompt overlay
+```
 
 ## Quick Start
 
