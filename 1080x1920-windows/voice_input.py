@@ -33,6 +33,10 @@ class VoiceInput:
 
         self.is_listening = False
         self.is_recording = False
+        # When muted (set by the app while Chibi is speaking), the listen loop
+        # skips capture and clears the queue — the half-duplex guard that stops
+        # Chibi's own TTS from being transcribed and fed back as input.
+        self.muted = False
         self.result_queue = queue.Queue()
 
         self._sd = None
@@ -195,14 +199,28 @@ class VoiceInput:
 
         while self.is_listening:
             try:
+                if self.muted:
+                    # Chibi is speaking: don't capture (so its TTS isn't
+                    # transcribed and looped back) and clear anything queued.
+                    self._drain_queue()
+                    time.sleep(0.05)
+                    continue
                 audio_data = self._record_speech()
-                if audio_data is not None:
+                if audio_data is not None and not self.muted:
                     text = self._transcribe(audio_data)
-                    if text and text.strip():
+                    if text and text.strip() and not self.muted:
                         self.result_queue.put(text.strip())
             except Exception as e:
                 print(f"[Voice] Error: {e}")
                 time.sleep(1)
+
+    def _drain_queue(self):
+        """Discard any pending transcriptions."""
+        try:
+            while True:
+                self.result_queue.get_nowait()
+        except queue.Empty:
+            pass
 
     # ─── Recording with callback stream ─────────────────────────────────
 
@@ -248,7 +266,7 @@ class VoiceInput:
         recording = False
 
         try:
-            while self.is_listening:
+            while self.is_listening and not self.muted:
                 try:
                     data = self._audio_queue.get(timeout=0.5)
                 except queue.Empty:

@@ -7,7 +7,17 @@
       "Bash(ssh -i ~/.ssh/id_ed25519 -o BatchMode=yes velle@raspberrypi.lan 'md5sum ~/chibi-llm-main/voice_input.py')",
       "Bash(scp -i ~/.ssh/id_ed25519 -o BatchMode=yes thoth_lexicon.json thoth.py thoth_index.npz thoth_index.json velle@raspberrypi.lan:/home/velle/chibi-llm-main/)",
       "Bash(scp -i ~/.ssh/id_ed25519 -o BatchMode=yes thoth_corpus/jung_psych_of_unconscious_1916.txt thoth_corpus/README.txt velle@raspberrypi.lan:/home/velle/chibi-llm-main/thoth_corpus/)",
-      "Bash(ssh -i *)"
+      "Bash(ssh -i *)",
+      "Bash(ssh velle@raspberrypi.lan 'ls ~/chibi-llm-main/ 2>/dev/null && echo \"---\" && grep -rni \"horus\" ~/chibi-llm-main/ --include=*.py -l 2>/dev/null')",
+      "Bash(ssh velle@raspberrypi.lan 'cat ~/.xinitrc 2>/dev/null | grep -v \"^#\" | grep -i \"py\\\\|cd\\\\|chibi\" ')",
+      "Bash(ssh *)",
+      "Bash(python3 -m py_compile main.py)",
+      "Bash(scp -q /tmp/tmp.RfTSI7KTBn/main.py velle@raspberrypi.lan:~/chibi-llm-main/main.py)",
+      "Bash(cp /tmp/tmp.RfTSI7KTBn/main.py main.py)",
+      "Bash(cp /tmp/tmp.RfTSI7KTBn/main.py 1080x1920-linux/main.py)",
+      "Bash(scp -q /home/velle/Documents/chibi-llm/voice_output.py velle@raspberrypi.lan:~/chibi-llm-main/voice_output.py)",
+      "Bash(grep -vE \"onnxruntime|DiscoverDevices|GPU device|^$\")",
+      "Bash(scp -q /home/velle/Documents/chibi-llm/main.py velle@raspberrypi.lan:~/chibi-llm-main/main.py)"
     ]
   }
 }

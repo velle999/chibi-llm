@@ -108,6 +108,11 @@ class VoiceInput:
 
         self.is_listening = False
         self.is_recording = False
+        # When muted (set by the app while Chibi is speaking), the listen loop
+        # keeps reading the recorder so its pipe doesn't back up, but discards
+        # the audio and clears the queue — this is the half-duplex guard that
+        # stops Chibi's own TTS from being transcribed and fed back as input.
+        self.muted = False
         self.result_queue = queue.Queue()
 
         self._ready = False
@@ -211,16 +216,33 @@ class VoiceInput:
         try:
             while self.is_listening:
                 try:
+                    if self.muted:
+                        # Chibi is speaking: keep the recorder drained so its
+                        # pipe doesn't back up, but throw the audio away and
+                        # clear anything already queued, so its TTS is never
+                        # transcribed and looped back as fake input.
+                        if self._read_chunk() is None:
+                            raise RuntimeError("audio recorder stopped unexpectedly")
+                        self._drain_queue()
+                        continue
                     audio_data = self._record_speech()
-                    if audio_data is not None:
+                    if audio_data is not None and not self.muted:
                         text = self._transcribe(audio_data)
-                        if text and text.strip():
+                        if text and text.strip() and not self.muted:
                             self.result_queue.put(text.strip())
                 except Exception as e:
                     print(f"[Voice] Error in listen loop: {e}")
                     time.sleep(1)
         finally:
             self._close_stream()
+
+    def _drain_queue(self):
+        """Discard any pending transcriptions."""
+        try:
+            while True:
+                self.result_queue.get_nowait()
+        except queue.Empty:
+            pass
 
     def _record_speech(self) -> np.ndarray | None:
         """
@@ -236,7 +258,7 @@ class VoiceInput:
         recording = False
 
         try:
-            while self.is_listening:
+            while self.is_listening and not self.muted:
                 audio_array = self._read_chunk()
                 if audio_array is None:
                     # recorder died; surface as error so the loop can restart it

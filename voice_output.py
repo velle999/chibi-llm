@@ -96,12 +96,14 @@ class VoiceOutput:
         print("[TTS] Install: pip install piper-tts --break-system-packages")
 
     def _find_voice(self):
-        """Find the voice model file."""
-        if self._piper_cmd == "__python__":
-            # Python module handles voice download itself
-            self._voice_path = self.voice
-            return
+        """Find the voice model file.
 
+        Resolve the actual .onnx path for both the binary and Python module
+        backends. The Python module's PiperVoice.load() derives the config
+        sidecar as ``<model_path>.json``, so it must be handed the full
+        ``…/<voice>.onnx`` path (which yields ``<voice>.onnx.json``) — passing
+        the bare voice name makes it look for ``<voice>.json`` and fail.
+        """
         voice_dirs = [
             os.path.expanduser("~/.local/share/piper-voices"),
             os.path.expanduser("~/piper-voices"),
@@ -122,7 +124,7 @@ class VoiceOutput:
                 print(f"[TTS] Voice model: {candidate}")
                 return
 
-        # Not found — piper can auto-download some voices
+        # Not found locally — the Python module can auto-download some voices.
         self._voice_path = self.voice
         print(f"[TTS] Voice '{self.voice}' not found locally, piper may download it")
 
@@ -260,11 +262,26 @@ class VoiceOutput:
             if not hasattr(self, '_synth'):
                 self._synth = piper.PiperVoice.load(self._voice_path, use_cuda=False)
 
+            # length_scale controls speed; lower = faster (Piper inverts it).
+            length_scale = 1.0 / self.speed if self.speed > 0 else 1.0
+
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 temp_path = f.name
                 with wave.open(f, "wb") as wav:
-                    self._synth.synthesize(text, wav,
-                                           length_scale=1.0 / self.speed if self.speed > 0 else 1.0)
+                    # piper-tts >= 1.3 splits the API: synthesize_wav() writes
+                    # the audio *and* sets the WAV header (channels/rate/width),
+                    # configured via SynthesisConfig. The old synthesize(text,
+                    # wav, length_scale=...) left the header unset → wave raised
+                    # "# channels not specified". Prefer the new API, fall back
+                    # to the old positional one for older piper builds.
+                    if hasattr(self._synth, "synthesize_wav"):
+                        from piper import SynthesisConfig
+                        self._synth.synthesize_wav(
+                            text, wav,
+                            syn_config=SynthesisConfig(length_scale=length_scale),
+                        )
+                    else:
+                        self._synth.synthesize(text, wav, length_scale=length_scale)
 
             play_path = temp_path
 

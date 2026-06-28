@@ -11,8 +11,19 @@ import math
 import time
 import threading
 import json
+import re
+import difflib
 import textwrap
 from enum import Enum, auto
+
+# Line-buffer stdout/stderr so logs flush promptly to ~/chibi.log on the Pi
+# (Python block-buffers when stdout is redirected to a file, which otherwise
+# hides the most recent prints — including tracebacks — until a 4KB block fills).
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass
 from dataclasses import dataclass, field
 
 from llm_client import LLMClient
@@ -26,6 +37,28 @@ from thoth import ThothCorpus
 from vision import Vision, is_vision_request
 from alarm import AlarmManager, is_alarm_request, is_dismiss_word, is_snooze_word, parse_alarm_time
 from config import Config
+
+# Whisper-tiny frequently mishears the spoken name "Horus". Any of these single
+# words spoken alone is treated as the "horus" entry trigger. (Exit is handled
+# separately and stays strict so a misheard word can't drop you out of a dream.)
+_HORUS_SOUNDALIKES = {
+    "horus", "horace", "horis", "hosur", "horse", "hoarse", "chorus",
+    "taurus", "torus", "porous", "poorest", "boris", "morris", "norris",
+    "hummus", "hours", "horror", "florist", "forrest", "forest",
+}
+
+
+def _sounds_like_horus(word: str) -> bool:
+    """True if a transcribed word is "horus" or a likely Whisper-tiny mishear.
+
+    Backed by the curated set above plus a fuzzy fallback, so close variants
+    are caught without listing every one — but a word still has to *resemble*
+    "horus", which is what keeps ambient "<x> mode" room noise (TV, "sleep
+    mode", ...) from re-triggering Horus mode.
+    """
+    if word in _HORUS_SOUNDALIKES:
+        return True
+    return len(word) >= 4 and difflib.SequenceMatcher(None, word, "horus").ratio() >= 0.7
 
 # ─── Avatar States ───────────────────────────────────────────────────────────
 
@@ -255,7 +288,8 @@ class StatusBar:
 
     def init_font(self):
         self.font = pygame.font.SysFont("monospace", 14)
-        self.clock_font = pygame.font.SysFont("monospace", 22, bold=True)
+        self.clock_font = pygame.font.SysFont(
+            "monospace", getattr(self.config, "clock_font_size", 22), bold=True)
 
     def draw(self, surface, state: AvatarState, connected: bool,
              voice_in=None, voice_out=None):
@@ -270,17 +304,18 @@ class StatusBar:
         time_str = now.strftime("%I:%M %p")
         clock_surf = self.clock_font.render(time_str, True, self.config.neon_primary)
         surface.blit(clock_surf, (12, 6))
+        clock_bottom = 6 + clock_surf.get_height()
 
-        # Date under clock
+        # Date under clock (anchored below the clock so larger clock sizes fit)
         date_str = now.strftime("%a %b %d")
         date_surf = self.font.render(date_str, True, (80, 100, 120))
-        surface.blit(date_surf, (14, 30))
+        surface.blit(date_surf, (14, clock_bottom + 2))
 
         # Connection status dot (next to date)
         dot_color = (0, 255, 100) if connected else (255, 60, 60)
         status_text = f"● {state.name}"
         text_surf = self.font.render(status_text, True, dot_color)
-        surface.blit(text_surf, (14, 46))
+        surface.blit(text_surf, (14, clock_bottom + 4 + date_surf.get_height()))
 
         # Voice indicators (center)
         voice_parts = []
@@ -407,6 +442,9 @@ class ChibiAvatarApp:
         self.conversation: list[dict] = []
         self.response_text = ""
         self.is_generating = False
+        # Timestamp of the last frame we were speaking — drives the half-duplex
+        # echo cooldown so the mic doesn't transcribe Chibi's own TTS tail.
+        self._last_spoke_at = 0.0
 
         # Auto-enter Horus mode if within the threshold hours. Must run AFTER
         # conversation/bubble/voice_out exist, since _enter_horus_mode uses them.
@@ -692,7 +730,10 @@ class ChibiAvatarApp:
         if self.horus_mode:
             # Exit: an exact short command (so "exit"/"done" mentioned inside a
             # recounted dream doesn't trip it), or an explicit phrase anywhere.
-            if lower in self.config.horus_exit_words or any(
+            # Whisper appends punctuation ("Exit." -> "exit."), so strip it off
+            # before the exact-match check or the short commands never fire.
+            cmd = lower.strip(" .,!?\"'")
+            if cmd in self.config.horus_exit_words or any(
                 p in lower for p in self.config.horus_exit_phrases
             ):
                 self._exit_horus_mode()
@@ -704,6 +745,17 @@ class ChibiAvatarApp:
             if phrase in lower:
                 self._enter_horus_mode(auto=False)
                 return True
+        # Whisper-tiny mangles the proper noun "Horus" almost every time
+        # (observed: "horse mode", "the poorest mode", "chorus mode"). Activate
+        # when a word that sounds like "Horus" is present — but require either
+        # the word "mode" or a very short utterance, so ambient "<x> mode" room
+        # noise (TV, etc.) and a stray soundalike mid-sentence don't re-trigger.
+        words = re.findall(r"[a-z']+", lower)
+        if any(_sounds_like_horus(w) for w in words) and (
+            "mode" in words or len(words) <= 2
+        ):
+            self._enter_horus_mode(auto=False)
+            return True
         return False
 
     def _generate_stars(self, count):
@@ -1032,7 +1084,19 @@ class ChibiAvatarApp:
         # ── Normal update logic ──────────────────────────────────────────
         # Poll voice input — BUT only when we're not speaking or generating
         is_speaking = self.voice_out and self.voice_out.is_speaking if self.voice_out else False
-        mic_safe = not self.is_generating and not is_speaking
+        if is_speaking:
+            self._last_spoke_at = time.time()
+        # Half-duplex echo guard: the mic (a USB cam beside the speaker) picks up
+        # Chibi's own TTS, which Whisper would transcribe and feed back as fake
+        # input — a runaway loop (it recites memory to itself). Mute the recorder
+        # while speaking/generating and for a short cooldown after (the TTS tail
+        # is captured a beat past is_speaking clearing), so that audio is dropped
+        # at the source instead of looping back.
+        echo_cooldown = getattr(self.config, "mic_echo_cooldown", 1.0)
+        mic_safe = (not self.is_generating and not is_speaking
+                    and time.time() - self._last_spoke_at > echo_cooldown)
+        if self.voice_in:
+            self.voice_in.muted = not mic_safe
 
         if self.voice_in and mic_safe:
             # Show listening state when mic is active
@@ -1043,6 +1107,7 @@ class ChibiAvatarApp:
 
             transcription = self.voice_in.get_transcription()
             if transcription:
+                print(f"[Voice] Heard: {transcription!r}")
                 self.send_message(transcription)
         elif self.voice_in and not mic_safe:
             # Drain any transcriptions that came in while speaking (they're just echo)
