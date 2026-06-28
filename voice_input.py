@@ -2,18 +2,23 @@
 Voice Input — Speech-to-text using faster-whisper (CTranslate2 optimized Whisper).
 Runs locally on the Pi 4 using the tiny model for low latency.
 
+Audio capture is done by streaming raw PCM from an external recorder subprocess
+(`arecord` or, as a fallback, `pw-record`). This deliberately AVOIDS
+PortAudio / PyAudio / sounddevice: libportaudio hard-links libjack, and merely
+initializing it spawns a pipewire-jack client whose data loop can segfault the
+whole process (a native crash Python cannot catch). The recorder subprocesses
+talk to ALSA / PipeWire directly and never load libjack.
+
 Install:
-    pip install faster-whisper pyaudio --break-system-packages
-    sudo apt install portaudio19-dev
+    pip install faster-whisper --break-system-packages
+    # capture needs one of:  alsa-utils (arecord)  or  pipewire (pw-record)
 """
 
 import threading
 import queue
 import time
-import wave
-import io
-import tempfile
-import os
+import shutil
+import subprocess
 import numpy as np
 
 # Audio config
@@ -24,6 +29,35 @@ SILENCE_THRESHOLD = 500       # Amplitude threshold for silence detection
 SILENCE_DURATION = 1.5        # Seconds of silence to trigger end of speech
 MIN_SPEECH_DURATION = 0.5     # Minimum seconds of speech to process
 MAX_SPEECH_DURATION = 30.0    # Maximum recording duration
+
+_BYTES_PER_SAMPLE = 2         # s16le
+
+
+def _build_capture_cmd():
+    """
+    Return (argv, name) for a raw-PCM recorder, preferring arecord (ALSA),
+    falling back to pw-record (PipeWire). Returns (None, None) if neither
+    is installed.
+    """
+    if shutil.which("arecord"):
+        return ([
+            "arecord", "-q",
+            "-f", "S16_LE",
+            "-r", str(RATE),
+            "-c", str(CHANNELS),
+            "-t", "raw",
+            "-",
+        ], "arecord")
+    if shutil.which("pw-record"):
+        return ([
+            "pw-record",
+            "--rate", str(RATE),
+            "--channels", str(CHANNELS),
+            "--format", "s16",
+            "--raw",
+            "-",
+        ], "pw-record")
+    return (None, None)
 
 
 class VoiceInput:
@@ -37,8 +71,7 @@ class VoiceInput:
         self.device = device
         self.compute_type = compute_type
         self.model = None
-        self.audio = None
-        self.stream = None
+        self._proc = None
 
         self.is_listening = False
         self.is_recording = False
@@ -70,11 +103,44 @@ class VoiceInput:
     def ready(self) -> bool:
         return self._ready
 
-    def _init_audio(self):
-        """Initialize PyAudio."""
-        if self.audio is None:
-            import pyaudio
-            self.audio = pyaudio.PyAudio()
+    def _open_stream(self):
+        """Start the recorder subprocess streaming raw s16le PCM to stdout."""
+        cmd, name = _build_capture_cmd()
+        if cmd is None:
+            raise RuntimeError(
+                "no audio recorder found — install alsa-utils (arecord) "
+                "or pipewire (pw-record)"
+            )
+        print(f"[Voice] Capturing audio via {name}")
+        self._proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+
+    def _close_stream(self):
+        if self._proc is not None:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+
+    def _read_chunk(self) -> np.ndarray | None:
+        """Read exactly CHUNK samples of int16 PCM, or None on EOF/death."""
+        want = CHUNK * _BYTES_PER_SAMPLE
+        buf = b""
+        while len(buf) < want:
+            part = self._proc.stdout.read(want - len(buf))
+            if not part:
+                return None  # recorder exited / EOF
+            buf += part
+        return np.frombuffer(buf, dtype=np.int16)
 
     def start_listening(self):
         """Start the voice listening loop in a background thread."""
@@ -102,34 +168,32 @@ class VoiceInput:
 
     def _listen_loop(self):
         """Continuous listening loop with voice activity detection."""
-        self._init_audio()
+        try:
+            self._open_stream()
+        except Exception as e:
+            print(f"[Voice] Could not start audio capture: {e}")
+            self.is_listening = False
+            return
 
-        while self.is_listening:
-            try:
-                audio_data = self._record_speech()
-                if audio_data is not None:
-                    text = self._transcribe(audio_data)
-                    if text and text.strip():
-                        self.result_queue.put(text.strip())
-            except Exception as e:
-                print(f"[Voice] Error in listen loop: {e}")
-                time.sleep(1)
+        try:
+            while self.is_listening:
+                try:
+                    audio_data = self._record_speech()
+                    if audio_data is not None:
+                        text = self._transcribe(audio_data)
+                        if text and text.strip():
+                            self.result_queue.put(text.strip())
+                except Exception as e:
+                    print(f"[Voice] Error in listen loop: {e}")
+                    time.sleep(1)
+        finally:
+            self._close_stream()
 
     def _record_speech(self) -> np.ndarray | None:
         """
-        Record audio with voice activity detection.
+        Record audio with voice activity detection from the recorder stream.
         Returns numpy array of audio data, or None if no speech detected.
         """
-        import pyaudio
-
-        stream = self.audio.open(
-            format=pyaudio.paInt16,
-            channels=CHANNELS,
-            rate=RATE,
-            input=True,
-            frames_per_buffer=CHUNK,
-        )
-
         frames = []
         silent_chunks = 0
         speech_chunks = 0
@@ -140,9 +204,11 @@ class VoiceInput:
 
         try:
             while self.is_listening:
-                data = stream.read(CHUNK, exception_on_overflow=False)
-                audio_array = np.frombuffer(data, dtype=np.int16)
-                amplitude = np.abs(audio_array).mean()
+                audio_array = self._read_chunk()
+                if audio_array is None:
+                    # recorder died; surface as error so the loop can restart it
+                    raise RuntimeError("audio recorder stopped unexpectedly")
+                amplitude = np.abs(audio_array.astype(np.int32)).mean()
 
                 if amplitude > SILENCE_THRESHOLD:
                     if not recording:
@@ -150,10 +216,10 @@ class VoiceInput:
                         self.is_recording = True
                     silent_chunks = 0
                     speech_chunks += 1
-                    frames.append(data)
+                    frames.append(audio_array.copy())
                 elif recording:
                     silent_chunks += 1
-                    frames.append(data)
+                    frames.append(audio_array.copy())
 
                     if silent_chunks > silence_limit:
                         # End of speech
@@ -161,22 +227,14 @@ class VoiceInput:
 
                 if recording and speech_chunks > max_chunks:
                     break
-
-                # Small yield to not hog CPU
-                if not recording:
-                    time.sleep(0.01)
-
         finally:
-            stream.stop_stream()
-            stream.close()
             self.is_recording = False
 
         if speech_chunks < min_speech_chunks:
             return None
 
         # Convert to numpy float32 array for Whisper
-        audio_bytes = b"".join(frames)
-        audio_np = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        audio_np = np.concatenate(frames).astype(np.float32) / 32768.0
         return audio_np
 
     def _transcribe(self, audio_data: np.ndarray) -> str:
@@ -205,5 +263,4 @@ class VoiceInput:
     def cleanup(self):
         """Clean up audio resources."""
         self.is_listening = False
-        if self.audio:
-            self.audio.terminate()
+        self._close_stream()

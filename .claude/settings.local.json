@@ -5,7 +5,16 @@
       "Bash(cd *)",
       "Bash(echo \"=== exit $? ===\")",
       "Bash(python3 -m py_compile config.py sprite_renderer.py main.py 1080x1920-linux/config.py 1080x1920-linux/sprite_renderer.py 1080x1920-linux/main.py 1080x1920-windows/config.py 1080x1920-windows/sprite_renderer.py 1080x1920-windows/main.py)",
-      "Bash(python3 -m py_compile config.py main.py 1080x1920-linux/main.py 1080x1920-windows/main.py)"
+      "Bash(python3 -m py_compile config.py main.py 1080x1920-linux/main.py 1080x1920-windows/main.py)",
+      "Bash(coredumpctl list *)",
+      "Read(//home/velle/.local/lib/**)",
+      "Bash(python3 -c \"import ctypes; pa=ctypes.CDLL\\('libportaudio.so.2'\\); print\\('Pa_Initialize rc=', pa.Pa_Initialize\\(\\)\\)\")",
+      "Bash(echo \"exit=$?\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('voice_input.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(python3)",
+      "Bash(timeout 120 coredumpctl gdb 276684 '--debugger-arguments=-batch -ex '\\\\''thread 1'\\\\'' -ex '\\\\''bt'\\\\'' -ex '\\\\''x/i $pc'\\\\''')",
+      "Bash(grep -vE \"warning:|debuginfod|Enable|disabled|permanent|New LWP|sharedlibrary|set solib|Thread debugging|libthread_db|This GDB|following URLs|^$\")",
+      "Bash(awk 'NR>=400 && NR<=462' 1080x1920-linux/main.py)"
     ]
   }
 }

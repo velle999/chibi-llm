@@ -388,12 +388,15 @@ class ChibiAvatarApp:
         # Horus / Thoth mode
         self.horus_mode = False
         self.horus_auto_triggered = False
-        self._check_horus_threshold()
 
         # Conversation
         self.conversation: list[dict] = []
         self.response_text = ""
         self.is_generating = False
+
+        # Auto-enter Horus mode if within the threshold hours. Must run AFTER
+        # conversation/bubble/voice_out exist, since _enter_horus_mode uses them.
+        self._check_horus_threshold()
 
     def _init_display(self):
         """Create the main surface, fullscreen on the chosen monitor.
