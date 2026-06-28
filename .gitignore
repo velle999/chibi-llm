@@ -1,1 +1,10 @@
 /__pycache__
+
+# Local secret/host overrides — never commit real tokens or keys.
+# Applies in every copy (root, 1080x1920-linux, 1080x1920-windows).
+config.local.py
+
+# Backups (e.g. ~/.chibi-avatar-memory.json.bak.* lives in $HOME, but keep
+# any that land in the tree out of git too).
+*.bak
+*.bak.*

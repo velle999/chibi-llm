@@ -1,0 +1,15 @@
+# Local config overrides — copy this file to "config.local.py" (which is
+# gitignored) and put your real secrets / hosts here. Anything you set
+# overrides the defaults in config.py, and is never committed to git.
+#
+#   cp config.local.py.example config.local.py
+#
+# Environment variables take precedence over this file, e.g.:
+#   CHIBI_DREAM_SYNC_TOKEN=...  CHIBI_WEATHER_API_KEY=...
+#
+# Any attribute name from Config is valid here. Common ones:
+
+# dream_sync_token = "a-long-random-shared-secret"   # same on both machines
+# weather_api_key  = "your-openweathermap-key"
+# llm_host         = "192.168.40.153"
+# dream_sync_peer_host = "raspberrypi.lan"
