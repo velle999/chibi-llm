@@ -365,6 +365,13 @@ class ChibiAvatarApp:
         self.memory.start_conversation()
         self._message_count = 0
 
+        # Dream journal sync with the peer chibi instance over the LAN
+        self.dream_sync = None
+        if getattr(self.config, "dream_sync_enabled", False):
+            from dream_sync import DreamSync
+            self.dream_sync = DreamSync(self.memory, self.config)
+            self.dream_sync.start()
+
         # Thoth's reference corpus (correspondence lexicon + optional text RAG)
         self.thoth = ThothCorpus(config=self.config)
 
@@ -659,6 +666,10 @@ class ChibiAvatarApp:
                 if dream_text:
                     threading.Thread(target=self.memory.add_dream_entry,
                                      args=(dream_text,), daemon=True).start()
+                    # Pull any entries the peer recorded while we were apart;
+                    # our just-recorded one propagates back on the peer's next pull.
+                    if self.dream_sync:
+                        self.dream_sync.sync_soon()
                 # Ground the scribe: the lexicon is local + instant; the RAG
                 # passages were fetched in parallel above — join them here.
                 lexicon = self.thoth.lookup(dream_text) if dream_text else ""
@@ -1156,6 +1167,8 @@ class ChibiAvatarApp:
             self._extract_memories()
         self.memory.save()
         # Cleanup
+        if self.dream_sync:
+            self.dream_sync.stop()
         self.feeds.stop()
         self.alarm.stop()
         if self.vision:

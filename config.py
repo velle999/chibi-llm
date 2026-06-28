@@ -155,6 +155,19 @@ class Config:
     horus_lapis: tuple = (70, 90, 180)       # Deep lapis (replaces secondary)
     horus_bg_color: tuple = (10, 9, 26)      # Deep indigo void behind the scribe
 
+    # ── Dream Journal Sync (peer chibi over LAN) ─────────────────────────
+    # Keeps the dream/vision journal in step between the two chibi instances:
+    # this Pi in the bedroom and the PC in the living room. Peer-to-peer
+    # union-merge — set each machine's peer_host to the OTHER machine, and use
+    # the SAME port + token on both. (This machine: the Pi / 192.168.40.248 /
+    # bedroom. Peer below is the living-room PC at 192.168.40.153.)
+    dream_sync_enabled: bool = True
+    dream_sync_peer_host: str = "192.168.40.153"  # the OTHER chibi (the PC)
+    dream_sync_port: int = 8077                    # same on both machines
+    dream_sync_token: str = "change-this-shared-secret"  # same on both machines
+    dream_sync_interval: int = 300                 # background pull every N seconds
+    dream_sync_timeout: float = 8.0                # per-request network timeout
+
     # ── Thoth RAG (phase 2 — primary-text retrieval) ─────────────────────
     # Off until you build an index: drop public-domain .txt files into
     # thoth_corpus/ then run `python thoth_rag.py build`, then flip this on.

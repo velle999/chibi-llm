@@ -170,6 +170,42 @@ class PersistentMemory:
             })
         self.save()
 
+    def get_dream_entries(self) -> list:
+        """Return a snapshot copy of all dream entries (for network sync)."""
+        with self._lock:
+            return list(self.dream_entries)
+
+    def merge_dream_entries(self, remote_entries: list) -> int:
+        """
+        Merge dream entries received from a peer instance. Returns how many
+        were newly added.
+
+        Dream entries are append-only and never trimmed, so the union of the
+        two journals is the correct result. Dedup is by (created_at, text):
+        timestamps are high-resolution, so the only collisions are entries we
+        already received from this peer — making the merge idempotent.
+        """
+        if not remote_entries:
+            return 0
+        added = 0
+        with self._lock:
+            existing = {(e.get("created_at"), e.get("text"))
+                        for e in self.dream_entries}
+            for e in remote_entries:
+                if not isinstance(e, dict) or not e.get("text"):
+                    continue
+                key = (e.get("created_at"), e.get("text"))
+                if key in existing:
+                    continue
+                self.dream_entries.append(e)
+                existing.add(key)
+                added += 1
+            if added:
+                self.dream_entries.sort(key=lambda x: x.get("created_at", ""))
+        if added:
+            self.save()
+        return added
+
     def set_user_name(self, name: str):
         """Remember the user's name."""
         self.user_name = name
