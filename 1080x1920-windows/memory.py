@@ -233,23 +233,25 @@ class PersistentMemory:
                     pass
             parts.append(stats_line)
 
-        # Important facts (sorted by importance, top 15)
+        # Important facts (sorted by importance, top 6). Kept small on purpose:
+        # dumping the whole memory store every turn makes Chibi recite "ancient
+        # history" unprompted, especially with a small local LLM.
         if self.facts:
             sorted_facts = sorted(self.facts,
                                   key=lambda x: x.get("importance", 5),
-                                  reverse=True)[:15]
+                                  reverse=True)[:6]
             fact_lines = [f"- {f['text']}" for f in sorted_facts]
             parts.append("What you know about the user:\n" + "\n".join(fact_lines))
 
-        # Explicit notes
+        # Explicit notes (last 4)
         if self.notes:
-            recent_notes = self.notes[-10:]
+            recent_notes = self.notes[-4:]
             note_lines = [f"- {n['text']}" for n in recent_notes]
             parts.append("Things the user asked you to remember:\n" + "\n".join(note_lines))
 
-        # Recent summaries (last 5)
+        # Recent summaries (last 2)
         if self.summaries:
-            recent = self.summaries[-5:]
+            recent = self.summaries[-2:]
             sum_lines = [f"- [{s.get('created_at', '?')[:10]}] {s['text']}"
                          for s in recent]
             parts.append("Recent conversation summaries:\n" + "\n".join(sum_lines))

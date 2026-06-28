@@ -728,14 +728,22 @@ class ChibiAvatarApp:
         """
         lower = text.lower().strip()
         if self.horus_mode:
-            # Exit: an exact short command (so "exit"/"done" mentioned inside a
-            # recounted dream doesn't trip it), or an explicit phrase anywhere.
-            # Whisper appends punctuation ("Exit." -> "exit."), so strip it off
-            # before the exact-match check or the short commands never fire.
+            # Exit must be as forgiving as entry. Whisper-tiny garnishes spoken
+            # commands with stray words ("TV wake up", "course mode", "okay
+            # chibi"), so the old exact-whole-message match missed most real
+            # exits — yet entry fires on any short "<x> mode". The one thing we
+            # must NOT treat as an exit is Chibi's own dream interpretation
+            # echoing back through the mic, but those are always long, so a short
+            # word-count gate cleanly separates a user command from echo.
+            # Whisper appends punctuation ("Exit." -> "exit."); strip it first.
             cmd = lower.strip(" .,!?\"'")
-            if cmd in self.config.horus_exit_words or any(
-                p in lower for p in self.config.horus_exit_phrases
-            ):
+            words = re.findall(r"[a-z']+", lower)
+            is_short = len(words) <= 4
+            if (cmd in self.config.horus_exit_words
+                    or any(p in lower for p in self.config.horus_exit_phrases)
+                    or (is_short and any(w in self.config.horus_exit_words
+                                         for w in words))
+                    or (is_short and words and words[-1] == "mode")):
                 self._exit_horus_mode()
                 return True
             # While recording, don't let entry phrases swallow the dream text.
@@ -745,15 +753,19 @@ class ChibiAvatarApp:
             if phrase in lower:
                 self._enter_horus_mode(auto=False)
                 return True
-        # Whisper-tiny mangles the proper noun "Horus" almost every time
-        # (observed: "horse mode", "the poorest mode", "chorus mode"). Activate
-        # when a word that sounds like "Horus" is present — but require either
-        # the word "mode" or a very short utterance, so ambient "<x> mode" room
-        # noise (TV, etc.) and a stray soundalike mid-sentence don't re-trigger.
+        # Whisper-tiny can't transcribe the proper noun "Horus" — it comes out a
+        # different word almost every time (horse/chorus/course/forest/"the
+        # highest"...), so no word-list can catch them all. But the *only* spoken
+        # "<x> mode" command in Chibi is the Horus entry, so treat any short
+        # utterance ending in "mode" as the trigger (excluding "chibi mode",
+        # which is an exit phrase). Stray "<x> mode" noise can't spiral anymore
+        # now that the mic is muted while Chibi speaks.
         words = re.findall(r"[a-z']+", lower)
-        if any(_sounds_like_horus(w) for w in words) and (
-            "mode" in words or len(words) <= 2
-        ):
+        if words and words[-1] == "mode" and len(words) <= 3 and "chibi" not in words:
+            self._enter_horus_mode(auto=False)
+            return True
+        # Bare name with no "mode" — still catch obvious single-word mishears.
+        if any(_sounds_like_horus(w) for w in words) and len(words) <= 2:
             self._enter_horus_mode(auto=False)
             return True
         return False
@@ -1191,13 +1203,27 @@ class ChibiAvatarApp:
         # faint Eye of Horus presides over the scene.
         if self.horus_mode:
             self.screen.fill(self.config.horus_bg_color)
-            wm_size = self.config.window_height * 0.32
+            wm_size = int(self.config.window_height * 0.32)
             wm_alpha = int(22 + 8 * math.sin(t * 0.8))
-            self.renderer._draw_eye_of_horus(
-                self.screen,
-                self.config.window_width // 2,
-                int(self.config.window_height * 0.40),
-                wm_size, self.config.horus_gold, wm_alpha, glow=False,
+            # Cache the eye watermark. Its thick arcs + a per-frame 490x428
+            # surface alloc were the bulk of what pegged the Pi's CPU in Horus
+            # mode, dropping the render below interactive fps (so voice "exit"
+            # was never serviced). Draw it once at full alpha; blit each frame
+            # with just the pulsing alpha.
+            eye = getattr(self, "_horus_eye_surf", None)
+            if eye is None:
+                ew, eh = int(wm_size * 3.2), int(wm_size * 2.8)
+                eye = pygame.Surface((ew, eh), pygame.SRCALPHA)
+                self.renderer._draw_eye_of_horus(
+                    eye, ew // 2, eh // 2, wm_size,
+                    self.config.horus_gold, 255, glow=False,
+                )
+                self._horus_eye_surf = eye
+            eye.set_alpha(wm_alpha)
+            self.screen.blit(
+                eye,
+                (self.config.window_width // 2 - eye.get_width() // 2,
+                 int(self.config.window_height * 0.40) - eye.get_height() // 2),
             )
         else:
             self.screen.fill(self.config.bg_color)
@@ -1226,16 +1252,21 @@ class ChibiAvatarApp:
             size = max(1, int(star['size'] * (0.7 + 0.3 * math.sin(t * star['speed']))))
             pygame.draw.circle(self.screen, color, (star['x'], star['y']), size)
 
-        # Subtle grid
-        grid_alpha = 15
-        grid_surf = pygame.Surface(
-            (self.config.window_width, self.config.window_height), pygame.SRCALPHA
-        )
-        for x in range(0, self.config.window_width, 40):
-            pygame.draw.line(grid_surf, (*self.config.neon_primary, grid_alpha), (x, 0), (x, self.config.window_height))
-        for y in range(0, self.config.window_height, 40):
-            pygame.draw.line(grid_surf, (*self.config.neon_primary, grid_alpha), (0, y), (self.config.window_width, y))
-        self.screen.blit(grid_surf, (0, 0))
+        # Subtle grid — static, so build it once and reuse. Rebuilding the
+        # full-screen surface + 30+ draw.line calls every frame was a big chunk
+        # of the per-frame render cost that starved the loop (badly enough in
+        # Horus mode that voice input stopped being serviced).
+        if getattr(self, "_grid_surf", None) is None:
+            grid_alpha = 15
+            gs = pygame.Surface(
+                (self.config.window_width, self.config.window_height), pygame.SRCALPHA
+            )
+            for x in range(0, self.config.window_width, 40):
+                pygame.draw.line(gs, (*self.config.neon_primary, grid_alpha), (x, 0), (x, self.config.window_height))
+            for y in range(0, self.config.window_height, 40):
+                pygame.draw.line(gs, (*self.config.neon_primary, grid_alpha), (0, y), (self.config.window_width, y))
+            self._grid_surf = gs
+        self.screen.blit(self._grid_surf, (0, 0))
 
         # Draw weather particles
         for wp in self.weather_particles:
@@ -1396,36 +1427,43 @@ class ChibiAvatarApp:
 
             # Camera PiP thumbnail (bottom-right corner)
             if self.vision and self.config.vision_pip:
-                frame_bytes = self.vision.get_frame_for_display()
-                if frame_bytes:
-                    try:
-                        import cv2
-                        import numpy as np
-                        nparr = np.frombuffer(frame_bytes, np.uint8)
-                        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                        if img is not None:
-                            # Resize for PiP
-                            pip_w, pip_h = 120, 90
-                            img = cv2.resize(img, (pip_w, pip_h))
-                            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                            pip_surf = pygame.image.frombuffer(
-                                img.tobytes(), (pip_w, pip_h), 'RGB'
-                            )
-                            # Position: bottom-right, above input box
-                            px = self.config.window_width - pip_w - 12
-                            py = self.config.window_height - pip_h - 100
-                            # Border
-                            border_rect = pygame.Rect(px - 2, py - 2, pip_w + 4, pip_h + 4)
-                            pygame.draw.rect(self.screen, self.config.neon_primary,
-                                             border_rect, 1, border_radius=4)
-                            self.screen.blit(pip_surf, (px, py))
-                            # Label
-                            if not hasattr(self, '_pip_font'):
-                                self._pip_font = pygame.font.SysFont("monospace", 10)
-                            cam_label = self._pip_font.render("CAM", True, self.config.neon_primary)
-                            self.screen.blit(cam_label, (px + 2, py + 2))
-                    except Exception:
-                        pass  # Silent fail — PiP is optional eye candy
+                pip_w, pip_h = 120, 90
+                # Decoding the JPEG every frame (cv2 imdecode+resize+cvtColor) was
+                # a heavy chunk of the per-frame cost on the Pi. The camera only
+                # refreshes a few times a second anyway, so decode at ~6 fps and
+                # reuse the cached thumbnail surface in between.
+                self._pip_decode_count = getattr(self, "_pip_decode_count", 0) + 1
+                if self._pip_decode_count % 5 == 0 or not hasattr(self, "_pip_surf"):
+                    frame_bytes = self.vision.get_frame_for_display()
+                    if frame_bytes:
+                        try:
+                            import cv2
+                            import numpy as np
+                            nparr = np.frombuffer(frame_bytes, np.uint8)
+                            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                            if img is not None:
+                                img = cv2.resize(img, (pip_w, pip_h))
+                                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                                self._pip_surf = pygame.image.frombuffer(
+                                    img.tobytes(), (pip_w, pip_h), 'RGB'
+                                )
+                        except Exception:
+                            pass  # Silent fail — PiP is optional eye candy
+                pip_surf = getattr(self, "_pip_surf", None)
+                if pip_surf is not None:
+                    # Position: bottom-right, above input box
+                    px = self.config.window_width - pip_w - 12
+                    py = self.config.window_height - pip_h - 100
+                    # Border
+                    border_rect = pygame.Rect(px - 2, py - 2, pip_w + 4, pip_h + 4)
+                    pygame.draw.rect(self.screen, self.config.neon_primary,
+                                     border_rect, 1, border_radius=4)
+                    self.screen.blit(pip_surf, (px, py))
+                    # Label
+                    if not hasattr(self, '_pip_font'):
+                        self._pip_font = pygame.font.SysFont("monospace", 10)
+                    cam_label = self._pip_font.render("CAM", True, self.config.neon_primary)
+                    self.screen.blit(cam_label, (px + 2, py + 2))
 
             # UI
             self.status_bar.draw(self.screen, self.state, self.llm.connected,

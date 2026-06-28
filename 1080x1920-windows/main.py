@@ -719,14 +719,22 @@ class ChibiAvatarApp:
         """
         lower = text.lower().strip()
         if self.horus_mode:
-            # Exit: an exact short command (so "exit"/"done" mentioned inside a
-            # recounted dream doesn't trip it), or an explicit phrase anywhere.
-            # Whisper appends punctuation ("Exit." -> "exit."), so strip it off
-            # before the exact-match check or the short commands never fire.
+            # Exit must be as forgiving as entry. Whisper-tiny garnishes spoken
+            # commands with stray words ("TV wake up", "course mode", "okay
+            # chibi"), so the old exact-whole-message match missed most real
+            # exits — yet entry fires on any short "<x> mode". The one thing we
+            # must NOT treat as an exit is Chibi's own dream interpretation
+            # echoing back through the mic, but those are always long, so a short
+            # word-count gate cleanly separates a user command from echo.
+            # Whisper appends punctuation ("Exit." -> "exit."); strip it first.
             cmd = lower.strip(" .,!?\"'")
-            if cmd in self.config.horus_exit_words or any(
-                p in lower for p in self.config.horus_exit_phrases
-            ):
+            words = re.findall(r"[a-z']+", lower)
+            is_short = len(words) <= 4
+            if (cmd in self.config.horus_exit_words
+                    or any(p in lower for p in self.config.horus_exit_phrases)
+                    or (is_short and any(w in self.config.horus_exit_words
+                                         for w in words))
+                    or (is_short and words and words[-1] == "mode")):
                 self._exit_horus_mode()
                 return True
             # While recording, don't let entry phrases swallow the dream text.
@@ -736,15 +744,19 @@ class ChibiAvatarApp:
             if phrase in lower:
                 self._enter_horus_mode(auto=False)
                 return True
-        # Whisper-tiny mangles the proper noun "Horus" almost every time
-        # (observed: "horse mode", "the poorest mode", "chorus mode"). Activate
-        # when a word that sounds like "Horus" is present — but require either
-        # the word "mode" or a very short utterance, so ambient "<x> mode" room
-        # noise (TV, etc.) and a stray soundalike mid-sentence don't re-trigger.
+        # Whisper-tiny can't transcribe the proper noun "Horus" — it comes out a
+        # different word almost every time (horse/chorus/course/forest/"the
+        # highest"...), so no word-list can catch them all. But the *only* spoken
+        # "<x> mode" command in Chibi is the Horus entry, so treat any short
+        # utterance ending in "mode" as the trigger (excluding "chibi mode",
+        # which is an exit phrase). Stray "<x> mode" noise can't spiral anymore
+        # now that the mic is muted while Chibi speaks.
         words = re.findall(r"[a-z']+", lower)
-        if any(_sounds_like_horus(w) for w in words) and (
-            "mode" in words or len(words) <= 2
-        ):
+        if words and words[-1] == "mode" and len(words) <= 3 and "chibi" not in words:
+            self._enter_horus_mode(auto=False)
+            return True
+        # Bare name with no "mode" — still catch obvious single-word mishears.
+        if any(_sounds_like_horus(w) for w in words) and len(words) <= 2:
             self._enter_horus_mode(auto=False)
             return True
         return False
