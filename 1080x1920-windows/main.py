@@ -22,7 +22,6 @@ from voice_output import VoiceOutput
 from data_feeds import DataFeedManager
 from hud_overlay import HUDOverlay
 from memory import PersistentMemory
-from soul import Soul
 from vision import Vision, is_vision_request
 from alarm import AlarmManager, is_alarm_request, is_dismiss_word, is_snooze_word, parse_alarm_time
 from config import Config
@@ -194,7 +193,7 @@ class InputBox:
         self.cursor_timer = 0
 
     def init_font(self):
-        self.font = pygame.font.SysFont("monospace", 26)
+        self.font = pygame.font.SysFont("monospace", 18)
 
     def handle_event(self, event) -> str | None:
         """Returns the submitted text or None."""
@@ -220,10 +219,10 @@ class InputBox:
             self.init_font()
 
         w = surface.get_width()
-        h = 60
-        y = surface.get_height() - h - 16
-        x = 30
-        box_w = w - 60
+        h = 44
+        y = surface.get_height() - h - 10
+        x = 20
+        box_w = w - 40
 
         # Background
         box_surf = pygame.Surface((box_w, h), pygame.SRCALPHA)
@@ -254,8 +253,8 @@ class StatusBar:
         self.clock_font = None
 
     def init_font(self):
-        self.font = pygame.font.SysFont("monospace", 22)
-        self.clock_font = pygame.font.SysFont("monospace", 36, bold=True)
+        self.font = pygame.font.SysFont("monospace", 14)
+        self.clock_font = pygame.font.SysFont("monospace", 22, bold=True)
 
     def draw(self, surface, state: AvatarState, connected: bool,
              voice_in=None, voice_out=None):
@@ -315,36 +314,9 @@ class StatusBar:
 class ChibiAvatarApp:
     def __init__(self):
         self.config = Config()
+        pygame.init()
 
-        # ── Voice input FIRST — before pygame steals the audio subsystem ──
-        self.voice_in = None
-        self.voice_out = None
-        if self.config.voice_enabled:
-            self.voice_in = VoiceInput(
-                model_size=self.config.stt_model,
-                device="cpu",
-                compute_type="int8",
-            )
-            # Pre-init audio while PortAudio is clean
-            self.voice_in._init_audio()
-
-        # ── Now init pygame ──────────────────────────────────────────────
-        # Don't let pygame.init() grab audio — we'll init mixer separately
-        pygame.display.init()
-        pygame.font.init()
-        # Init mixer with specific settings so it doesn't conflict
-        try:
-            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=2048)
-        except Exception:
-            print("[Audio] pygame.mixer init failed, TTS will use aplay/subprocess")
-
-        flags = 0
-        if self.config.fullscreen:
-            flags = pygame.FULLSCREEN
-
-        self.screen = pygame.display.set_mode(
-            (self.config.window_width, self.config.window_height), flags
-        )
+        self.screen = self._init_display()
         pygame.display.set_caption("Chibi LLM Avatar")
 
         self.clock = pygame.time.Clock()
@@ -363,27 +335,29 @@ class ChibiAvatarApp:
         self.status_bar = StatusBar(self.config)
         self.llm = LLMClient(self.config)
 
-        # Voice output (after pygame mixer init)
+        # Voice
+        self.voice_in = None
+        self.voice_out = None
         if self.config.voice_enabled:
             self.voice_out = VoiceOutput(
                 voice=self.config.tts_voice,
                 speed=self.config.tts_speed,
                 pitch_semitones=self.config.tts_pitch_semitones,
             )
-            # Start listening now (model may still be loading in background)
-            if self.voice_in:
-                self.voice_in.start_listening()
+            self.voice_in = VoiceInput(
+                model_size=self.config.stt_model,
+                device="cpu",
+                compute_type="int8",
+            )
+            self.voice_in.start_listening()
 
         # Background
-        self.bg_stars = self._generate_stars(200)
+        self.bg_stars = self._generate_stars(80)
         self.scanline_surf = self._create_scanlines()
-        self._generate_bg_elements()
-        self._grid_offset = 0.0
 
         # Data feeds + HUD
         self.feeds = DataFeedManager(self.config)
         self.hud = HUDOverlay(self.config)
-        self.soul = Soul(self.config)
 
         # Persistent memory
         self.memory = PersistentMemory()
@@ -407,10 +381,60 @@ class ChibiAvatarApp:
         self.alarm = AlarmManager(self.config)
         self._alarm_speak_timer = 0
 
+        # Horus / Thoth mode
+        self.horus_mode = False
+        self.horus_auto_triggered = False
+        self._check_horus_threshold()
+
         # Conversation
         self.conversation: list[dict] = []
         self.response_text = ""
         self.is_generating = False
+
+    def _init_display(self):
+        """Create the main surface, fullscreen on the chosen monitor.
+
+        Plain set_mode(FULLSCREEN) always lands on SDL display 0 (the primary),
+        which is why Chibi pops up on the main screen. We pick a target monitor
+        and use its native resolution so the window fills it with no video
+        mode-switch. config.display_index controls the choice (-1 = auto-detect
+        the portrait monitor).
+        """
+        if not self.config.fullscreen:
+            return pygame.display.set_mode(
+                (self.config.window_width, self.config.window_height)
+            )
+
+        try:
+            sizes = pygame.display.get_desktop_sizes()
+        except Exception:
+            sizes = []
+
+        target = self.config.display_index
+        if target is None or target < 0:
+            # Auto: first portrait monitor (taller than wide), else primary.
+            target = next((i for i, (w, h) in enumerate(sizes) if h > w), 0)
+        elif target >= len(sizes):
+            print(f"[Display] display_index {target} out of range; "
+                  f"{len(sizes)} monitor(s) detected — using 0")
+            target = 0
+
+        size = sizes[target] if target < len(sizes) else (
+            self.config.window_width, self.config.window_height)
+
+        if sizes:
+            print(f"[Display] monitors={sizes} -> fullscreen on #{target} {size}")
+
+        try:
+            screen = pygame.display.set_mode(size, pygame.FULLSCREEN, display=target)
+        except (TypeError, pygame.error) as e:
+            # Older pygame without the display= kwarg, or target unavailable.
+            print(f"[Display] targeted fullscreen failed ({e}); falling back to #0")
+            screen = pygame.display.set_mode(size, pygame.FULLSCREEN)
+
+        # Adopt the real surface size so all layout uses the monitor's geometry.
+        self.config.window_width, self.config.window_height = screen.get_size()
+        return screen
 
     def _extract_memories(self):
         """Ask the LLM to extract memorable facts from recent conversation."""
@@ -425,6 +449,56 @@ class ChibiAvatarApp:
             self.memory.process_extraction(result)
         except Exception as e:
             print(f"[Memory] Extraction failed: {e}")
+    def _check_horus_threshold(self):
+        """Auto-enter Horus mode during threshold hours (default 5-8am)."""
+        from datetime import datetime
+        hour = datetime.now().hour
+        if (self.config.horus_threshold_start <= hour < self.config.horus_threshold_end
+                and not self.horus_auto_triggered):
+            self._enter_horus_mode(auto=True)
+
+    def _enter_horus_mode(self, auto=False):
+        """Activate Thoth aspect."""
+        self.horus_mode = True
+        if auto:
+            self.horus_auto_triggered = True
+        print("[Horus] Thoth mode activated.")
+        opening = (
+            "The threshold hour. The veil is thin. What did you bring back?"
+            if auto else
+            "The journal is open. Speak what needs to be recorded."
+        )
+        self.conversation.append({"role": "assistant", "content": opening})
+        self.bubble.set_text(opening)
+        if self.voice_out:
+            self.voice_out.speak(opening)
+
+    def _exit_horus_mode(self):
+        """Return to Chibi aspect."""
+        self.horus_mode = False
+        print("[Horus] Returning to Chibi mode.")
+        closing = "Recorded. The eye closes. I'm Chibi again :3"
+        self.conversation.append({"role": "assistant", "content": closing})
+        self.bubble.set_text(closing)
+        if self.voice_out:
+            self.voice_out.speak(closing)
+
+    def _check_horus_triggers(self, text: str) -> bool:
+        """
+        Check if user input is a Horus mode switch command.
+        Returns True if the input was consumed as a command.
+        """
+        lower = text.lower().strip()
+        for phrase in self.config.horus_exit_phrases:
+            if phrase in lower:
+                self._exit_horus_mode()
+                return True
+        for phrase in self.config.horus_entry_phrases:
+            if phrase in lower:
+                if not self.horus_mode:
+                    self._enter_horus_mode(auto=False)
+                return True
+        return False
 
     def _generate_stars(self, count):
         import random
@@ -436,39 +510,8 @@ class ChibiAvatarApp:
                 'size': random.uniform(1, 3),
                 'speed': random.uniform(0.2, 1.0),
                 'phase': random.uniform(0, math.pi * 2),
-                'layer': random.choice([0, 0, 0, 1, 1, 2]),  # depth layer
             })
         return stars
-
-    def _generate_bg_elements(self):
-        """Generate floating background geometry for animated BG."""
-        import random
-        self.bg_shapes = []
-        w, h = self.config.window_width, self.config.window_height
-        for _ in range(25):
-            self.bg_shapes.append({
-                'x': random.uniform(0, w),
-                'y': random.uniform(0, h),
-                'vx': random.uniform(-0.3, 0.3),
-                'vy': random.uniform(-0.15, 0.15),
-                'size': random.uniform(20, 80),
-                'type': random.choice(['hex', 'ring', 'diamond', 'cross', 'triangle']),
-                'rot': random.uniform(0, 360),
-                'rot_speed': random.uniform(-15, 15),
-                'alpha': random.randint(8, 25),
-                'color_idx': random.randint(0, 2),  # index into neon colors
-                'phase': random.uniform(0, math.pi * 2),
-            })
-        # Vertical light beams (slow drift)
-        self.bg_beams = []
-        for _ in range(6):
-            self.bg_beams.append({
-                'x': random.uniform(0, w),
-                'width': random.uniform(1, 4),
-                'alpha': random.randint(5, 15),
-                'speed': random.uniform(-0.2, 0.2),
-                'color_idx': random.randint(0, 2),
-            })
 
     def _create_scanlines(self):
         surf = pygame.Surface(
@@ -545,7 +588,9 @@ class ChibiAvatarApp:
                 self.voice_out.speak(reply)
             self.last_interaction = time.time()
             return
-
+        # ── Horus mode trigger check ──────────────────────────────────────
+        if self._check_horus_triggers(text):
+            return
         # ── Normal message ────────────────────────────────────────────────
         self.conversation.append({"role": "user", "content": text})
         self.set_state(AvatarState.THINKING)
@@ -559,12 +604,12 @@ class ChibiAvatarApp:
 
         thread = threading.Thread(
             target=self._generate_response,
-            args=(vision_request, text),
+            args=(vision_request,),
             daemon=True,
         )
         thread.start()
 
-    def _generate_response(self, vision_request=False, user_text=""):
+    def _generate_response(self, vision_request=False):
         """Background thread: stream response from LLM."""
         try:
             # Inject live data + memory context
@@ -572,7 +617,13 @@ class ChibiAvatarApp:
             memory_context = self.memory.get_context()
 
             extra_system = ""
-            if memory_context:
+            if self.horus_mode:
+                extra_system += self.config.horus_system_prompt
+                extra_system += "\n\n" + memory_context
+                dream_ctx = self.memory.get_dream_context()
+                if dream_ctx:
+                    extra_system += "\n\n" + dream_ctx
+            elif memory_context:
                 extra_system += "\n\n" + memory_context
 
             # Vision: if requested, capture and describe the scene
@@ -594,75 +645,9 @@ class ChibiAvatarApp:
             if live_context:
                 extra_system += (
                     "\n\n--- BACKGROUND REFERENCE DATA (DO NOT mention unless asked) ---\n"
-                    "This data is available if Velle asks about weather, time, stocks, crypto, or news. "
+                    "This data is available if Velle asks about weather, time, stocks, or crypto. "
                     "Do NOT volunteer this information. Only use it to answer relevant questions.\n"
                     + live_context
-                )
-
-            # Calendar context — available for schedule questions
-            cal_url = getattr(self.config, 'calendar_ics_url', '')
-            cal_context = self.soul.calendar.get_context()
-            if cal_context:
-                extra_system += (
-                    "\n\n=== REAL CALENDAR (from Google Calendar ICS) ===\n"
-                    "These are Velle's ACTUAL events. ONLY mention events listed here.\n"
-                    "If asked about something NOT listed, say \"I don't see that on your calendar.\"\n"
-                    "DO NOT INVENT EVENTS OR DATES.\n"
-                    + cal_context + "\n"
-                    "=== END REAL CALENDAR ==="
-                )
-            elif cal_url:
-                extra_system += (
-                    "\n\n=== REAL CALENDAR ===\n"
-                    "Connected to Google Calendar. NO events found.\n"
-                    "If asked about calendar, say: \"I don't see anything on your calendar.\"\n"
-                    "DO NOT INVENT EVENTS OR DATES.\n"
-                    "=== END REAL CALENDAR ==="
-                )
-
-            # System context — available for system questions
-            sys_context = self.soul.system_monitor.get_context()
-            if sys_context:
-                extra_system += (
-                    "\n\n=== REAL PC STATS (from psutil + nvidia-smi) ===\n"
-                    "ONLY quote these exact numbers. DO NOT invent or change them.\n"
-                    + sys_context + "\n"
-                    "=== END REAL PC STATS ==="
-                )
-            else:
-                extra_system += (
-                    "\n\n=== REAL PC STATS ===\n"
-                    "NOT AVAILABLE. psutil is not working.\n"
-                    "If Velle asks about PC/system/specs, say: "
-                    "\"I can't see your system stats right now — try pip install psutil\"\n"
-                    "DO NOT GUESS. DO NOT MAKE UP NUMBERS.\n"
-                    "=== END REAL PC STATS ==="
-                )
-
-            # Screen awareness — what Velle is looking at
-            if self.soul.state.last_screen_description:
-                extra_system += (
-                    "\n\n=== REAL SCREEN CONTENT ===\n"
-                    "ONLY describe what's written here. DO NOT invent screen contents.\n"
-                    + self.soul.state.last_screen_description + "\n"
-                    "=== END REAL SCREEN CONTENT ==="
-                )
-            else:
-                extra_system += (
-                    "\n\n=== REAL SCREEN CONTENT ===\n"
-                    "NOT AVAILABLE. Screen capture is not active.\n"
-                    "If asked what's on screen, say: \"I can't see your screen right now\"\n"
-                    "DO NOT GUESS.\n"
-                    "=== END REAL SCREEN CONTENT ==="
-                )
-
-            # Soul — mood colors the response style
-            mood_context = self.soul.get_mood_context()
-            if mood_context:
-                extra_system += (
-                    "\n\n--- YOUR CURRENT INNER STATE ---\n"
-                    "Let this subtly influence your tone and energy, but don't describe your mood explicitly.\n"
-                    + mood_context
                 )
 
             full_response = ""
@@ -677,10 +662,16 @@ class ChibiAvatarApp:
 
             self.conversation.append({"role": "assistant", "content": full_response})
             self.is_generating = False
-
+            # Save Horus journal entry
+            if self.horus_mode and self.conversation:
+                last_user = next(
+                    (m["content"] for m in reversed(self.conversation)
+                     if m["role"] == "user"), ""
+                )
+                if last_user:
+                    self.memory.add_dream_entry(text=last_user)
             # Track interaction
             self.memory.record_interaction()
-            self.soul.on_interaction(user_text, full_response)
             self._message_count += 1
 
             # Extract memories every 6 messages (in separate thread, non-blocking)
@@ -700,7 +691,7 @@ class ChibiAvatarApp:
             # Wait for TTS to finish with a hard timeout
             if self.voice_out:
                 tts_wait_start = time.time()
-                while self.voice_out.busy and (time.time() - tts_wait_start) < 120:
+                while self.voice_out.busy and (time.time() - tts_wait_start) < 30:
                     time.sleep(0.1)
                 # Extra settle time so mic doesn't catch tail end of audio
                 time.sleep(0.8)
@@ -812,63 +803,6 @@ class ChibiAvatarApp:
             while self.voice_in.get_transcription() is not None:
                 pass
 
-        # ── Soul — monitor feed changes ──────────────────────────────────
-        # Weather change detection
-        current_weather = self.feeds.get_weather()
-        if not hasattr(self, '_prev_weather_condition'):
-            self._prev_weather_condition = current_weather.condition
-        if current_weather.condition != self._prev_weather_condition and current_weather.condition != "unknown":
-            self.soul.on_weather_change(self._prev_weather_condition, current_weather.condition, current_weather)
-            self._prev_weather_condition = current_weather.condition
-
-        # News update detection
-        current_news = self.feeds.get_news()
-        if not hasattr(self, '_prev_news_time'):
-            self._prev_news_time = ""
-        if current_news.updated_at != self._prev_news_time and current_news.headlines:
-            self.soul.on_news_update(current_news.headlines)
-            self._prev_news_time = current_news.updated_at
-
-        # Big market move detection
-        current_market = self.feeds.get_market()
-        if not hasattr(self, '_prev_market_time'):
-            self._prev_market_time = ""
-            self._market_alerted = set()  # Symbols already alerted this session
-        if current_market.updated_at != self._prev_market_time:
-            for t in current_market.tickers + current_market.crypto:
-                if abs(t.change_pct) > 7.0 and t.symbol not in self._market_alerted:
-                    self.soul.on_market_move(t.symbol, t.change_pct)
-                    self._market_alerted.add(t.symbol)
-            self._prev_market_time = current_market.updated_at
-
-        # ── Soul impulses — spontaneous thoughts ─────────────────────────
-        if not self.is_generating and self.state in (AvatarState.IDLE, AvatarState.SLEEPING):
-            impulse = self.soul.get_impulse()
-            if impulse:
-                # Wake up if sleeping
-                if self.state == AvatarState.SLEEPING:
-                    self.set_state(AvatarState.IDLE)
-
-                # Display the thought and speak it
-                self.bubble.set_text(impulse)
-                self.set_state(AvatarState.SPEAKING)
-                if self.voice_out:
-                    self.voice_out.speak(impulse)
-
-                # Add to conversation so LLM has context
-                self.conversation.append({"role": "assistant", "content": impulse})
-                self.last_interaction = time.time()
-
-                # Set a timer to return to idle (non-blocking)
-                self._impulse_idle_time = time.time() + 4.0
-
-        # Return to idle after impulse display time
-        if hasattr(self, '_impulse_idle_time') and self._impulse_idle_time > 0:
-            if time.time() > self._impulse_idle_time and not self.is_generating:
-                if self.state == AvatarState.SPEAKING:
-                    self.set_state(AvatarState.IDLE)
-                self._impulse_idle_time = 0
-
         # Auto-sleep after inactivity
         if (self.state == AvatarState.IDLE and
                 time.time() - self.last_interaction > self.config.sleep_timeout):
@@ -881,16 +815,16 @@ class ChibiAvatarApp:
 
         # Emit particles based on state
         cx = self.config.window_width // 2
-        cy = self.config.window_height // 2 - 100
+        cy = self.config.window_height // 2 - 20
 
         if self.state == AvatarState.THINKING and self.state_timer % 0.15 < dt:
-            self.particles.emit(cx, cy - 80, count=2, color=self.config.neon_secondary, spread=1.5, life=0.8, size=2)
+            self.particles.emit(cx, cy - 60, count=2, color=self.config.neon_secondary, spread=1.5, life=0.8, size=2)
 
         if self.state == AvatarState.HAPPY and self.state_timer % 0.1 < dt:
-            self.particles.emit(cx, cy - 60, count=3, color=(255, 200, 50), spread=3, life=1.2, size=2.5)
+            self.particles.emit(cx, cy - 40, count=3, color=(255, 200, 50), spread=3, life=1.2, size=2.5)
 
         if self.state == AvatarState.SPEAKING and self.state_timer % 0.25 < dt:
-            self.particles.emit(cx, cy - 90, count=1, color=self.config.neon_primary, spread=1, life=0.6, size=2)
+            self.particles.emit(cx, cy - 70, count=1, color=self.config.neon_primary, spread=1, life=0.6, size=2)
 
         self.particles.update(dt)
         self.bubble.update(dt)
@@ -942,134 +876,73 @@ class ChibiAvatarApp:
             self.lightning_flash -= dt
 
     def draw_background(self, t):
-        w, h = self.config.window_width, self.config.window_height
-        self.screen.fill(self.config.bg_color)
+        # In the Thoth aspect the neon void deepens to indigo and a vast,
+        # faint Eye of Horus presides over the scene.
+        if self.horus_mode:
+            self.screen.fill(self.config.horus_bg_color)
+            wm_size = self.config.window_height * 0.32
+            wm_alpha = int(22 + 8 * math.sin(t * 0.8))
+            self.renderer._draw_eye_of_horus(
+                self.screen,
+                self.config.window_width // 2,
+                int(self.config.window_height * 0.40),
+                wm_size, self.config.horus_gold, wm_alpha, glow=False,
+            )
+        else:
+            self.screen.fill(self.config.bg_color)
 
-        # ── Scrolling grid (slow upward drift) ──────────────────────────
-        self._grid_offset = (self._grid_offset + 0.3) % 60
-        grid_surf = pygame.Surface((w, h), pygame.SRCALPHA)
-        grid_a = 12
-        gc = self.config.neon_primary
-        for x in range(0, w + 60, 60):
-            pygame.draw.line(grid_surf, (*gc, grid_a), (x, 0), (x, h))
-        for y in range(-60, h + 60, 60):
-            yy = y + int(self._grid_offset)
-            pygame.draw.line(grid_surf, (*gc, grid_a), (0, yy), (w, yy))
-        self.screen.blit(grid_surf, (0, 0))
-
-        # ── Light beams (vertical, slow drift) ──────────────────────────
-        neon_colors = [self.config.neon_primary, self.config.neon_secondary, self.config.neon_accent]
-        beam_surf = pygame.Surface((w, h), pygame.SRCALPHA)
-        for beam in self.bg_beams:
-            beam['x'] = (beam['x'] + beam['speed']) % w
-            bx = int(beam['x'])
-            bc = neon_colors[beam['color_idx']]
-            ba = beam['alpha'] + int(4 * math.sin(t * 0.5 + bx * 0.01))
-            bw = int(beam['width'] + 1.5 * math.sin(t * 0.3 + bx * 0.02))
-            pygame.draw.line(beam_surf, (*bc, max(1, ba)), (bx, 0), (bx, h), max(1, bw))
-        self.screen.blit(beam_surf, (0, 0))
-
-        # ── Lightning flash ─────────────────────────────────────────────
+        # Lightning flash
         if self.lightning_flash > 0:
-            fa = int(200 * (self.lightning_flash / 0.15))
-            fs = pygame.Surface((w, h), pygame.SRCALPHA)
-            fs.fill((200, 200, 255, fa))
-            self.screen.blit(fs, (0, 0))
+            flash_alpha = int(200 * (self.lightning_flash / 0.15))
+            flash_surf = pygame.Surface(
+                (self.config.window_width, self.config.window_height), pygame.SRCALPHA
+            )
+            flash_surf.fill((200, 200, 255, flash_alpha))
+            self.screen.blit(flash_surf, (0, 0))
 
-        # ── Parallax stars (3 depth layers) ─────────────────────────────
+        # Animated stars (dimmed during rain/snow)
         weather = self.feeds.get_weather()
         star_dim = 0.3 if weather.condition.lower() in ("rain", "snow", "storm", "overcast") else 1.0
 
-        layer_speeds = [0.0, 0.05, 0.15]  # Parallax drift per layer
         for star in self.bg_stars:
-            layer = star.get('layer', 0)
-            # Slow vertical drift for parallax
-            drift = layer_speeds[layer] * t * 20
-            sy = (star['y'] + drift) % h
-            sx = star['x']
-
             brightness = int((120 + 80 * math.sin(t * star['speed'] + star['phase'])) * star_dim)
             c = self.config.neon_primary
-            if layer == 2:
-                c = self.config.neon_accent  # Deep layer = purple tint
-            elif layer == 1:
-                c = (
-                    (c[0] + self.config.neon_secondary[0]) // 2,
-                    (c[1] + self.config.neon_secondary[1]) // 2,
-                    (c[2] + self.config.neon_secondary[2]) // 2,
-                )
             color = (
                 min(255, c[0] * brightness // 255),
                 min(255, c[1] * brightness // 255),
                 min(255, c[2] * brightness // 255),
             )
             size = max(1, int(star['size'] * (0.7 + 0.3 * math.sin(t * star['speed']))))
-            # Deeper layers = smaller, dimmer
-            size = max(1, size - layer)
-            pygame.draw.circle(self.screen, color, (int(sx), int(sy)), size)
+            pygame.draw.circle(self.screen, color, (star['x'], star['y']), size)
 
-        # ── Floating geometry ───────────────────────────────────────────
-        geo_surf = pygame.Surface((w, h), pygame.SRCALPHA)
-        for shape in self.bg_shapes:
-            shape['x'] = (shape['x'] + shape['vx']) % w
-            shape['y'] = (shape['y'] + shape['vy']) % h
-            shape['rot'] += shape['rot_speed'] * (1 / 30)
+        # Subtle grid
+        grid_alpha = 15
+        grid_surf = pygame.Surface(
+            (self.config.window_width, self.config.window_height), pygame.SRCALPHA
+        )
+        for x in range(0, self.config.window_width, 40):
+            pygame.draw.line(grid_surf, (*self.config.neon_primary, grid_alpha), (x, 0), (x, self.config.window_height))
+        for y in range(0, self.config.window_height, 40):
+            pygame.draw.line(grid_surf, (*self.config.neon_primary, grid_alpha), (0, y), (self.config.window_width, y))
+        self.screen.blit(grid_surf, (0, 0))
 
-            sx, sy = int(shape['x']), int(shape['y'])
-            sz = int(shape['size'] + 5 * math.sin(t * 0.5 + shape['phase']))
-            sc = neon_colors[shape['color_idx']]
-            sa = shape['alpha'] + int(5 * math.sin(t * 0.7 + shape['phase']))
-            sa = max(3, min(35, sa))
-            rot = shape['rot']
-
-            if shape['type'] == 'hex':
-                pts = []
-                for i in range(6):
-                    a = math.radians(60 * i + rot)
-                    pts.append((sx + math.cos(a) * sz, sy + math.sin(a) * sz))
-                pygame.draw.polygon(geo_surf, (*sc, sa), pts, 1)
-
-            elif shape['type'] == 'ring':
-                if sz > 3:
-                    pygame.draw.circle(geo_surf, (*sc, sa), (sx, sy), sz, 1)
-                    pygame.draw.circle(geo_surf, (*sc, sa // 2), (sx, sy), sz + 4, 1)
-
-            elif shape['type'] == 'diamond':
-                pts = [
-                    (sx, sy - sz), (sx + sz * 0.6, sy),
-                    (sx, sy + sz), (sx - sz * 0.6, sy),
-                ]
-                pygame.draw.polygon(geo_surf, (*sc, sa), pts, 1)
-
-            elif shape['type'] == 'cross':
-                arm = sz * 0.7
-                pygame.draw.line(geo_surf, (*sc, sa),
-                                 (sx - int(arm), sy), (sx + int(arm), sy), 1)
-                pygame.draw.line(geo_surf, (*sc, sa),
-                                 (sx, sy - int(arm)), (sx, sy + int(arm)), 1)
-
-            elif shape['type'] == 'triangle':
-                pts = []
-                for i in range(3):
-                    a = math.radians(120 * i + rot - 90)
-                    pts.append((sx + math.cos(a) * sz, sy + math.sin(a) * sz))
-                pygame.draw.polygon(geo_surf, (*sc, sa), pts, 1)
-
-        self.screen.blit(geo_surf, (0, 0))
-
-        # ── Weather particles ───────────────────────────────────────────
+        # Draw weather particles
         for wp in self.weather_particles:
             if wp['type'] == 'rain':
+                alpha = int(150 * wp['life'])
                 pygame.draw.line(
                     self.screen, (100, 150, 255),
                     (int(wp['x']), int(wp['y'])),
-                    (int(wp['x'] + wp['vx'] * 2), int(wp['y'] + wp['vy'] * 2)), 1)
+                    (int(wp['x'] + wp['vx'] * 2), int(wp['y'] + wp['vy'] * 2)),
+                    1,
+                )
             elif wp['type'] == 'snow':
                 alpha = int(200 * wp['life'])
                 size = max(1, int(wp.get('size', 3) * wp['life']))
-                ss = pygame.Surface((size * 2 + 2, size * 2 + 2), pygame.SRCALPHA)
-                pygame.draw.circle(ss, (220, 230, 255, alpha), (size + 1, size + 1), size)
-                self.screen.blit(ss, (int(wp['x']) - size, int(wp['y']) - size))
+                snow_surf = pygame.Surface((size * 2 + 2, size * 2 + 2), pygame.SRCALPHA)
+                pygame.draw.circle(snow_surf, (220, 230, 255, alpha),
+                                   (size + 1, size + 1), size)
+                self.screen.blit(snow_surf, (int(wp['x']) - size, int(wp['y']) - size))
 
     def run(self):
         while self.running:
@@ -1108,16 +981,17 @@ class ChibiAvatarApp:
             self.draw_background(t)
 
             cx = self.config.window_width // 2
-            cy = self.config.window_height // 2 - 100  # Upper-center for portrait
+            cy = self.config.window_height // 2 + 20
 
             # Draw chibi
-            self.renderer.draw(self.screen, cx, cy, self.state, self.state_timer, t)
+            self.renderer.draw(self.screen, cx, cy, self.state, self.state_timer, t,
+                               horus_mode=self.horus_mode)
 
             # Particles on top of chibi
             self.particles.draw(self.screen)
 
-            # Chat bubble — below the character on portrait
-            self.bubble.draw(self.screen, cx, cy + int(160 * self.config.chibi_scale))
+            # Chat bubble
+            self.bubble.draw(self.screen, cx, cy - 100)
 
             # ── Alarm visual overlay ─────────────────────────────────────
             if self.state == AvatarState.ALARM:
@@ -1138,8 +1012,8 @@ class ChibiAvatarApp:
 
                 # Alarm text at top
                 if not hasattr(self, '_alarm_font'):
-                    self._alarm_font = pygame.font.SysFont("monospace", 48, bold=True)
-                    self._alarm_font_sm = pygame.font.SysFont("monospace", 22)
+                    self._alarm_font = pygame.font.SysFont("monospace", 28, bold=True)
+                    self._alarm_font_sm = pygame.font.SysFont("monospace", 16)
 
                 # Wobble the text
                 wobble = math.sin(t * 6) * 3
@@ -1161,6 +1035,30 @@ class ChibiAvatarApp:
                 )
                 tint.fill((255, 200, 50, int(15 * pulse)))
                 self.screen.blit(tint, (0, 0))
+
+            # ── Thoth aspect overlay ─────────────────────────────────────
+            # A quiet gold vignette + sigil label. Alarm takes visual priority.
+            if self.horus_mode and self.state != AvatarState.ALARM:
+                if not hasattr(self, '_thoth_font'):
+                    self._thoth_font = pygame.font.SysFont("serif", 22, bold=True)
+
+                gold = self.config.horus_gold
+                breath = 0.5 + 0.5 * math.sin(t * 1.2)
+
+                vign = pygame.Surface(
+                    (self.config.window_width, self.config.window_height), pygame.SRCALPHA
+                )
+                pygame.draw.rect(
+                    vign, (*gold, int(50 + 40 * breath)),
+                    (0, 0, self.config.window_width, self.config.window_height),
+                    width=2, border_radius=4,
+                )
+                self.screen.blit(vign, (0, 0))
+
+                label = self._thoth_font.render("— THOTH —", True, gold)
+                label.set_alpha(int(150 + 80 * breath))
+                lx = self.config.window_width // 2 - label.get_width() // 2
+                self.screen.blit(label, (lx, 18))
 
             # Scanlines overlay
             if self.config.scanlines:
@@ -1185,15 +1083,15 @@ class ChibiAvatarApp:
                         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                         if img is not None:
                             # Resize for PiP
-                            pip_w, pip_h = 200, 150
+                            pip_w, pip_h = 120, 90
                             img = cv2.resize(img, (pip_w, pip_h))
                             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                             pip_surf = pygame.image.frombuffer(
                                 img.tobytes(), (pip_w, pip_h), 'RGB'
                             )
-                            # Position: bottom-right, above ticker bar
+                            # Position: bottom-right, above input box
                             px = self.config.window_width - pip_w - 12
-                            py = self.config.window_height - pip_h - 180
+                            py = self.config.window_height - pip_h - 100
                             # Border
                             border_rect = pygame.Rect(px - 2, py - 2, pip_w + 4, pip_h + 4)
                             pygame.draw.rect(self.screen, self.config.neon_primary,
@@ -1201,7 +1099,7 @@ class ChibiAvatarApp:
                             self.screen.blit(pip_surf, (px, py))
                             # Label
                             if not hasattr(self, '_pip_font'):
-                                self._pip_font = pygame.font.SysFont("monospace", 14)
+                                self._pip_font = pygame.font.SysFont("monospace", 10)
                             cam_label = self._pip_font.render("CAM", True, self.config.neon_primary)
                             self.screen.blit(cam_label, (px + 2, py + 2))
                     except Exception:
@@ -1223,7 +1121,6 @@ class ChibiAvatarApp:
         # Cleanup
         self.feeds.stop()
         self.alarm.stop()
-        self.soul.cleanup()
         if self.vision:
             self.vision.stop()
         if self.voice_in:

@@ -316,13 +316,7 @@ class ChibiAvatarApp:
         self.config = Config()
         pygame.init()
 
-        flags = 0
-        if self.config.fullscreen:
-            flags = pygame.FULLSCREEN
-
-        self.screen = pygame.display.set_mode(
-            (self.config.window_width, self.config.window_height), flags
-        )
+        self.screen = self._init_display()
         pygame.display.set_caption("Chibi LLM Avatar")
 
         self.clock = pygame.time.Clock()
@@ -387,10 +381,60 @@ class ChibiAvatarApp:
         self.alarm = AlarmManager(self.config)
         self._alarm_speak_timer = 0
 
+        # Horus / Thoth mode
+        self.horus_mode = False
+        self.horus_auto_triggered = False
+        self._check_horus_threshold()
+
         # Conversation
         self.conversation: list[dict] = []
         self.response_text = ""
         self.is_generating = False
+
+    def _init_display(self):
+        """Create the main surface, fullscreen on the chosen monitor.
+
+        Plain set_mode(FULLSCREEN) always lands on SDL display 0 (the primary),
+        which is why Chibi pops up on the main screen. We pick a target monitor
+        and use its native resolution so the window fills it with no video
+        mode-switch. config.display_index controls the choice (-1 = auto-detect
+        the portrait monitor).
+        """
+        if not self.config.fullscreen:
+            return pygame.display.set_mode(
+                (self.config.window_width, self.config.window_height)
+            )
+
+        try:
+            sizes = pygame.display.get_desktop_sizes()
+        except Exception:
+            sizes = []
+
+        target = self.config.display_index
+        if target is None or target < 0:
+            # Auto: first portrait monitor (taller than wide), else primary.
+            target = next((i for i, (w, h) in enumerate(sizes) if h > w), 0)
+        elif target >= len(sizes):
+            print(f"[Display] display_index {target} out of range; "
+                  f"{len(sizes)} monitor(s) detected — using 0")
+            target = 0
+
+        size = sizes[target] if target < len(sizes) else (
+            self.config.window_width, self.config.window_height)
+
+        if sizes:
+            print(f"[Display] monitors={sizes} -> fullscreen on #{target} {size}")
+
+        try:
+            screen = pygame.display.set_mode(size, pygame.FULLSCREEN, display=target)
+        except (TypeError, pygame.error) as e:
+            # Older pygame without the display= kwarg, or target unavailable.
+            print(f"[Display] targeted fullscreen failed ({e}); falling back to #0")
+            screen = pygame.display.set_mode(size, pygame.FULLSCREEN)
+
+        # Adopt the real surface size so all layout uses the monitor's geometry.
+        self.config.window_width, self.config.window_height = screen.get_size()
+        return screen
 
     def _extract_memories(self):
         """Ask the LLM to extract memorable facts from recent conversation."""
@@ -405,6 +449,56 @@ class ChibiAvatarApp:
             self.memory.process_extraction(result)
         except Exception as e:
             print(f"[Memory] Extraction failed: {e}")
+    def _check_horus_threshold(self):
+        """Auto-enter Horus mode during threshold hours (default 5-8am)."""
+        from datetime import datetime
+        hour = datetime.now().hour
+        if (self.config.horus_threshold_start <= hour < self.config.horus_threshold_end
+                and not self.horus_auto_triggered):
+            self._enter_horus_mode(auto=True)
+
+    def _enter_horus_mode(self, auto=False):
+        """Activate Thoth aspect."""
+        self.horus_mode = True
+        if auto:
+            self.horus_auto_triggered = True
+        print("[Horus] Thoth mode activated.")
+        opening = (
+            "The threshold hour. The veil is thin. What did you bring back?"
+            if auto else
+            "The journal is open. Speak what needs to be recorded."
+        )
+        self.conversation.append({"role": "assistant", "content": opening})
+        self.bubble.set_text(opening)
+        if self.voice_out:
+            self.voice_out.speak(opening)
+
+    def _exit_horus_mode(self):
+        """Return to Chibi aspect."""
+        self.horus_mode = False
+        print("[Horus] Returning to Chibi mode.")
+        closing = "Recorded. The eye closes. I'm Chibi again :3"
+        self.conversation.append({"role": "assistant", "content": closing})
+        self.bubble.set_text(closing)
+        if self.voice_out:
+            self.voice_out.speak(closing)
+
+    def _check_horus_triggers(self, text: str) -> bool:
+        """
+        Check if user input is a Horus mode switch command.
+        Returns True if the input was consumed as a command.
+        """
+        lower = text.lower().strip()
+        for phrase in self.config.horus_exit_phrases:
+            if phrase in lower:
+                self._exit_horus_mode()
+                return True
+        for phrase in self.config.horus_entry_phrases:
+            if phrase in lower:
+                if not self.horus_mode:
+                    self._enter_horus_mode(auto=False)
+                return True
+        return False
 
     def _generate_stars(self, count):
         import random
@@ -494,7 +588,9 @@ class ChibiAvatarApp:
                 self.voice_out.speak(reply)
             self.last_interaction = time.time()
             return
-
+        # ── Horus mode trigger check ──────────────────────────────────────
+        if self._check_horus_triggers(text):
+            return
         # ── Normal message ────────────────────────────────────────────────
         self.conversation.append({"role": "user", "content": text})
         self.set_state(AvatarState.THINKING)
@@ -521,7 +617,13 @@ class ChibiAvatarApp:
             memory_context = self.memory.get_context()
 
             extra_system = ""
-            if memory_context:
+            if self.horus_mode:
+                extra_system += self.config.horus_system_prompt
+                extra_system += "\n\n" + memory_context
+                dream_ctx = self.memory.get_dream_context()
+                if dream_ctx:
+                    extra_system += "\n\n" + dream_ctx
+            elif memory_context:
                 extra_system += "\n\n" + memory_context
 
             # Vision: if requested, capture and describe the scene
@@ -560,7 +662,14 @@ class ChibiAvatarApp:
 
             self.conversation.append({"role": "assistant", "content": full_response})
             self.is_generating = False
-
+            # Save Horus journal entry
+            if self.horus_mode and self.conversation:
+                last_user = next(
+                    (m["content"] for m in reversed(self.conversation)
+                     if m["role"] == "user"), ""
+                )
+                if last_user:
+                    self.memory.add_dream_entry(text=last_user)
             # Track interaction
             self.memory.record_interaction()
             self._message_count += 1
@@ -767,7 +876,20 @@ class ChibiAvatarApp:
             self.lightning_flash -= dt
 
     def draw_background(self, t):
-        self.screen.fill(self.config.bg_color)
+        # In the Thoth aspect the neon void deepens to indigo and a vast,
+        # faint Eye of Horus presides over the scene.
+        if self.horus_mode:
+            self.screen.fill(self.config.horus_bg_color)
+            wm_size = self.config.window_height * 0.32
+            wm_alpha = int(22 + 8 * math.sin(t * 0.8))
+            self.renderer._draw_eye_of_horus(
+                self.screen,
+                self.config.window_width // 2,
+                int(self.config.window_height * 0.40),
+                wm_size, self.config.horus_gold, wm_alpha, glow=False,
+            )
+        else:
+            self.screen.fill(self.config.bg_color)
 
         # Lightning flash
         if self.lightning_flash > 0:
@@ -862,7 +984,8 @@ class ChibiAvatarApp:
             cy = self.config.window_height // 2 + 20
 
             # Draw chibi
-            self.renderer.draw(self.screen, cx, cy, self.state, self.state_timer, t)
+            self.renderer.draw(self.screen, cx, cy, self.state, self.state_timer, t,
+                               horus_mode=self.horus_mode)
 
             # Particles on top of chibi
             self.particles.draw(self.screen)
@@ -912,6 +1035,30 @@ class ChibiAvatarApp:
                 )
                 tint.fill((255, 200, 50, int(15 * pulse)))
                 self.screen.blit(tint, (0, 0))
+
+            # ── Thoth aspect overlay ─────────────────────────────────────
+            # A quiet gold vignette + sigil label. Alarm takes visual priority.
+            if self.horus_mode and self.state != AvatarState.ALARM:
+                if not hasattr(self, '_thoth_font'):
+                    self._thoth_font = pygame.font.SysFont("serif", 22, bold=True)
+
+                gold = self.config.horus_gold
+                breath = 0.5 + 0.5 * math.sin(t * 1.2)
+
+                vign = pygame.Surface(
+                    (self.config.window_width, self.config.window_height), pygame.SRCALPHA
+                )
+                pygame.draw.rect(
+                    vign, (*gold, int(50 + 40 * breath)),
+                    (0, 0, self.config.window_width, self.config.window_height),
+                    width=2, border_radius=4,
+                )
+                self.screen.blit(vign, (0, 0))
+
+                label = self._thoth_font.render("— THOTH —", True, gold)
+                label.set_alpha(int(150 + 80 * breath))
+                lx = self.config.window_width // 2 - label.get_width() // 2
+                self.screen.blit(label, (lx, 18))
 
             # Scanlines overlay
             if self.config.scanlines:

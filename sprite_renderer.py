@@ -78,6 +78,48 @@ class ChibiRenderer:
         pygame.draw.circle(es, (*color, alpha), (ecx, ecy + int(size * 0.5)), max(2, int(size * 0.35)))
         surface.blit(es, (cx - int(size), cy - int(size * 2)))
 
+    def _draw_eye_of_horus(self, surface, cx, cy, size, color, alpha=255, glow=True):
+        """Stylized Wedjat — the Eye of Horus. The Thoth aspect's sigil."""
+        col = (*color[:3], alpha)
+        lw = max(2, int(size * 0.14))
+        w, h = int(size * 3.2), int(size * 2.8)
+        es = pygame.Surface((w, h), pygame.SRCALPHA)
+        ox = int(size * 0.4)              # left margin
+        oy = int(h * 0.42)                # eye centerline
+        eye_w = int(size * 2.0)
+
+        # Eyebrow — arc riding above the eye
+        pygame.draw.arc(es, col,
+                        (ox, oy - int(size * 1.0), int(size * 1.9), int(size * 1.0)),
+                        math.radians(15), math.radians(165), lw)
+        # Almond eye — upper and lower lids
+        pygame.draw.arc(es, col, (ox, oy - int(size * 0.6), eye_w, int(size * 1.2)),
+                        math.radians(5), math.radians(175), lw)
+        pygame.draw.arc(es, col, (ox, oy - int(size * 0.5), eye_w, int(size * 1.0)),
+                        math.radians(185), math.radians(355), lw)
+        # Pupil
+        pcx = ox + eye_w // 2
+        pygame.draw.circle(es, col, (pcx, oy), max(2, int(size * 0.3)))
+        # Vertical teardrop dropping from the eye
+        drop_x = ox + int(size * 0.55)
+        pygame.draw.line(es, col, (drop_x, oy + int(size * 0.35)),
+                         (drop_x, oy + int(size * 1.2)), lw)
+        pygame.draw.arc(es, col,
+                        (drop_x - int(size * 0.55), oy + int(size * 0.85),
+                         int(size * 0.55), int(size * 0.6)),
+                        math.radians(200), math.radians(15), lw)
+        # Diagonal cheek stroke from the outer corner
+        out_x = ox + eye_w
+        pygame.draw.line(es, col, (out_x - int(size * 0.15), oy + int(size * 0.3)),
+                         (out_x + int(size * 0.45), oy + int(size * 1.05)), lw)
+
+        if glow:
+            gr = int(size * 1.8)
+            gs = pygame.Surface((gr * 2, gr * 2), pygame.SRCALPHA)
+            pygame.draw.circle(gs, (*color[:3], int(45 * (alpha / 255))), (gr, gr), gr)
+            surface.blit(gs, (cx - gr, cy - gr))
+        surface.blit(es, (cx - w // 2, cy - h // 2))
+
     # ─── Blink System ────────────────────────────────────────────────────
 
     def _update_blink(self, dt, state_name):
@@ -185,11 +227,22 @@ class ChibiRenderer:
 
     # ─── Floaties ────────────────────────────────────────────────────────
 
-    def _update_floaties(self, cx, cy, state_name, t, dt):
+    def _update_floaties(self, cx, cy, state_name, t, dt, horus_mode=False):
         self.floaty_timer += dt
         spawn_rate = 0
         floaty_type = "star"
         color = self.config.neon_primary
+
+        # The scribe is not cute — no hearts, stars, or sparkles in Thoth aspect.
+        if horus_mode:
+            new = []
+            for f in self.floaties:
+                f['x'] += f['vx']; f['y'] += f['vy']; f['life'] -= dt * 0.6
+                f['rot'] += f['rot_speed'] * dt; f['vy'] -= 0.01
+                if f['life'] > 0:
+                    new.append(f)
+            self.floaties = new
+            return
 
         if state_name == "HAPPY":
             spawn_rate, floaty_type = 0.15, random.choice(["heart", "star", "star"])
@@ -570,9 +623,22 @@ class ChibiRenderer:
 
     # ─── Main Draw ───────────────────────────────────────────────────────
 
-    def draw(self, surface, cx, cy, state, state_timer, t):
+    def draw(self, surface, cx, cy, state, state_timer, t, horus_mode=False):
         state_name = state.name
         dt = 1 / 30
+
+        # Thoth aspect — recolour the whole avatar to gold/lapis by temporarily
+        # swapping the neon palette the draw helpers read from. Restored below.
+        _saved_palette = None
+        if horus_mode:
+            _saved_palette = (
+                self.config.neon_primary,
+                self.config.neon_secondary,
+                self.config.neon_accent,
+            )
+            self.config.neon_primary = self.config.horus_gold
+            self.config.neon_secondary = self.config.horus_lapis
+            self.config.neon_accent = self.config.horus_gold
 
         # Detect state transition for wake-up
         if self._prev_state == "SLEEPING" and state_name != "SLEEPING":
@@ -622,7 +688,7 @@ class ChibiRenderer:
             bob -= self.wake_transition * 15
 
         dcy = cy + int(bob)
-        self._update_floaties(cx, dcy, state_name, t, dt)
+        self._update_floaties(cx, dcy, state_name, t, dt, horus_mode)
 
         # ── Shadow (reacts to height) ────────────────────────────────────
         sw = 90 + int(abs(bob) * 1.5)
@@ -655,3 +721,18 @@ class ChibiRenderer:
                 rs = pygame.Surface((rr * 2 + 4, rr * 2 + 4), pygame.SRCALPHA)
                 pygame.draw.circle(rs, (*self.config.neon_secondary, ra), (rr + 2, rr + 2), rr, width=2)
                 surface.blit(rs, (cx - rr - 2, dcy - 30 - rr - 2))
+
+        # ── Thoth sigil — the Eye of Horus hovers above the scribe ───────────
+        if horus_mode:
+            head_cy = dcy - 50
+            eye_y = head_cy - int(115 * self.scale) + math.sin(t * 1.4) * 4
+            eye_size = 22 * self.scale
+            eye_alpha = int(190 + 50 * math.sin(t * 1.8))
+            self._draw_eye_of_horus(surface, cx, int(eye_y), eye_size,
+                                    self.config.horus_gold, eye_alpha)
+
+        # Restore the neon palette swapped out for the Thoth aspect.
+        if _saved_palette is not None:
+            (self.config.neon_primary,
+             self.config.neon_secondary,
+             self.config.neon_accent) = _saved_palette

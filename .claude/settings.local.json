@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m py_compile config.py sprite_renderer.py main.py)",
+      "Bash(cd *)",
+      "Bash(echo \"=== exit $? ===\")",
+      "Bash(python3 -m py_compile config.py sprite_renderer.py main.py 1080x1920-linux/config.py 1080x1920-linux/sprite_renderer.py 1080x1920-linux/main.py 1080x1920-windows/config.py 1080x1920-windows/sprite_renderer.py 1080x1920-windows/main.py)",
+      "Bash(python3 -m py_compile config.py main.py 1080x1920-linux/main.py 1080x1920-windows/main.py)"
+    ]
+  }
+}

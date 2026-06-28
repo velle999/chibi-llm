@@ -2,10 +2,11 @@
 Persistent Memory — Gives the chibi avatar long-term memory across sessions.
 
 Stores:
-  - Conversation summaries (auto-summarized periodically)
-  - User facts/preferences extracted from conversation
-  - Mood history and interaction stats
-  - Custom notes the user explicitly asks to remember
+- Conversation summaries (auto-summarized periodically)
+- User facts/preferences extracted from conversation
+- Mood history and interaction stats
+- Custom notes the user explicitly asks to remember
+- Dream/vision journal entries (Horus mode)
 
 Data is saved to a JSON file on disk, loaded on startup,
 and injected into the LLM system prompt for continuity.
@@ -20,21 +21,18 @@ import threading
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 
-
 MEMORY_FILE = os.path.expanduser("~/.chibi-avatar-memory.json")
 MAX_FACTS = 50
 MAX_SUMMARIES = 30
 MAX_SUMMARY_AGE_DAYS = 90
 
-
 @dataclass
 class MemoryEntry:
     text: str
-    category: str        # "fact", "preference", "note", "summary"
+    category: str  # "fact", "preference", "note", "summary"
     created_at: str
-    source: str = ""     # "user_explicit", "extracted", "auto_summary"
-    importance: int = 5  # 1-10
-
+    source: str = ""       # "user_explicit", "extracted", "auto_summary"
+    importance: int = 5    # 1-10
 
 class PersistentMemory:
     """
@@ -47,9 +45,10 @@ class PersistentMemory:
         self._lock = threading.Lock()
 
         # Memory stores
-        self.facts: list[dict] = []          # User facts & preferences
-        self.summaries: list[dict] = []      # Conversation summaries
-        self.notes: list[dict] = []          # Explicit "remember this"
+        self.facts: list[dict] = []        # User facts & preferences
+        self.summaries: list[dict] = []    # Conversation summaries
+        self.notes: list[dict] = []        # Explicit "remember this"
+        self.dream_entries: list[dict] = []  # Horus/Thoth journal entries
         self.stats: dict = {
             "total_conversations": 0,
             "total_messages": 0,
@@ -68,20 +67,18 @@ class PersistentMemory:
         if not os.path.exists(self.filepath):
             print("[Memory] No existing memory found, starting fresh.")
             return
-
         try:
             with open(self.filepath, "r") as f:
                 data = json.load(f)
-
             self.facts = data.get("facts", [])
             self.summaries = data.get("summaries", [])
             self.notes = data.get("notes", [])
+            self.dream_entries = data.get("dream_entries", [])
             self.stats = data.get("stats", self.stats)
             self.user_name = data.get("user_name", "")
-
             print(f"[Memory] Loaded: {len(self.facts)} facts, "
-                  f"{len(self.summaries)} summaries, {len(self.notes)} notes")
-
+                  f"{len(self.summaries)} summaries, {len(self.notes)} notes, "
+                  f"{len(self.dream_entries)} dream entries")
         except Exception as e:
             print(f"[Memory] Error loading: {e}")
 
@@ -92,11 +89,11 @@ class PersistentMemory:
                 "facts": self.facts,
                 "summaries": self.summaries,
                 "notes": self.notes,
+                "dream_entries": self.dream_entries,
                 "stats": self.stats,
                 "user_name": self.user_name,
                 "saved_at": datetime.now().isoformat(),
             }
-
             try:
                 # Atomic write via temp file
                 tmp = self.filepath + ".tmp"
@@ -120,7 +117,6 @@ class PersistentMemory:
                         existing["importance"] = importance
                         existing["updated_at"] = datetime.now().isoformat()
                     return
-
             self.facts.append({
                 "text": text,
                 "category": "fact",
@@ -128,12 +124,10 @@ class PersistentMemory:
                 "source": source,
                 "created_at": datetime.now().isoformat(),
             })
-
             # Trim oldest low-importance facts if over limit
             if len(self.facts) > MAX_FACTS:
                 self.facts.sort(key=lambda x: x.get("importance", 5))
                 self.facts = self.facts[-(MAX_FACTS):]
-
         self.save()
 
     def add_note(self, text: str):
@@ -154,11 +148,26 @@ class PersistentMemory:
                 "text": summary,
                 "created_at": datetime.now().isoformat(),
             })
-
             # Trim old summaries
             if len(self.summaries) > MAX_SUMMARIES:
                 self.summaries = self.summaries[-(MAX_SUMMARIES):]
+        self.save()
 
+    def add_dream_entry(self, text: str, symbols: list = None,
+                        emotional_tone: str = ""):
+        """
+        Add a Horus/Thoth mode journal entry.
+        These are kept separate from facts — raw phenomenological data,
+        not processed beliefs. Never trimmed automatically.
+        """
+        with self._lock:
+            self.dream_entries.append({
+                "text": text,
+                "symbols_flagged": symbols or [],
+                "emotional_tone": emotional_tone,
+                "mode": "horus",
+                "created_at": datetime.now().isoformat(),
+            })
         self.save()
 
     def set_user_name(self, name: str):
@@ -250,6 +259,22 @@ class PersistentMemory:
 
         return "[LONG-TERM MEMORY]\n" + "\n\n".join(parts)
 
+    def get_dream_context(self, last_n: int = 5) -> str:
+        """
+        Return recent dream/vision entries as context for Thoth mode.
+        Keeps Thoth aware of the emerging personal symbol pattern across sessions.
+        """
+        if not self.dream_entries:
+            return ""
+        recent = self.dream_entries[-last_n:]
+        lines = []
+        for e in recent:
+            date = e.get("created_at", "?")[:10]
+            symbols = ", ".join(e["symbols_flagged"]) if e["symbols_flagged"] else "none flagged yet"
+            tone = f" [{e['emotional_tone']}]" if e.get("emotional_tone") else ""
+            lines.append(f"[{date}]{tone} {e['text']} (symbols: {symbols})")
+        return "[HORUS JOURNAL — RECENT ENTRIES]\n" + "\n\n".join(lines)
+
     # ─── Memory Extraction Prompt ────────────────────────────────────────
 
     @staticmethod
@@ -266,6 +291,7 @@ class PersistentMemory:
         convo_text = "\n".join(lines)
 
         return f"""Analyze this conversation and extract important information to remember.
+
 Return a JSON object with these fields:
 - "facts": list of strings — factual things about the user (name, preferences, job, hobbies, etc.)
 - "summary": string — a 1-2 sentence summary of what was discussed
