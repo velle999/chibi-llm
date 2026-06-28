@@ -182,3 +182,39 @@ class Config:
     thoth_chunk_words: int = 90              # Target words per indexed passage
     thoth_passage_chars: int = 600           # Hard cap per surfaced passage
     thoth_rag_timeout: float = 8.0           # Seconds for the query embed call
+
+    def __post_init__(self):
+        """Layer secret/host overrides on top of the tracked defaults so real
+        secrets never live in this committed file. Precedence (later wins):
+            defaults  <  config.local.py (gitignored)  <  environment variables
+        """
+        import os
+
+        # 1. Optional gitignored config.local.py beside this file. It may set
+        #    any Config attribute, e.g.  dream_sync_token = "real-secret"
+        local_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "config.local.py"
+        )
+        if os.path.exists(local_path):
+            import importlib.util
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    "chibi_config_local", local_path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                for key in vars(mod):
+                    if not key.startswith("_") and hasattr(self, key):
+                        setattr(self, key, getattr(mod, key))
+            except Exception as e:
+                print(f"[Config] Could not load config.local.py: {e}")
+
+        # 2. Environment variables win (handy for systemd / kiosk launch).
+        for env, attr in (
+            ("CHIBI_DREAM_SYNC_TOKEN", "dream_sync_token"),
+            ("CHIBI_WEATHER_API_KEY", "weather_api_key"),
+            ("CHIBI_LLM_HOST", "llm_host"),
+            ("CHIBI_DREAM_SYNC_PEER_HOST", "dream_sync_peer_host"),
+        ):
+            val = os.environ.get(env)
+            if val:
+                setattr(self, attr, val)
