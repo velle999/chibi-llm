@@ -3,14 +3,15 @@ Thoth corpus — the scribe's reference material.
 
 Phase 1 (now): a curated *correspondence lexicon*. Given a dream/vision
 account, surface the symbols within it and their associations across the
-Egyptian, Hermetic, Gnostic, and Kabbalistic traditions — as resonance, not
-interpretation. The block is injected into the system prompt in horus_mode so
+Egyptian, Hermetic, Gnostic, Kabbalistic, and Jungian traditions — as
+resonance, not interpretation. The block is injected into the system prompt in horus_mode so
 a small local model has a grounded symbolic vocabulary to draw from instead of
 confabulating attributions.
 
 Phase 2 (later): full-text RAG. `retrieve()` is the seam — embed public-domain
 primary texts (Mead's Hermetica, Budge's Book of the Dead, the Kybalion,
-Mathers' Kabbalah Unveiled) and return short passages relevant to the account.
+Mathers' Kabbalah Unveiled, Jung's Psychology of the Unconscious) and return
+short passages relevant to the account.
 It is a no-op stub for now, so the injection site and the three-copy mirroring
 are already in place when the corpus is indexed.
 """
