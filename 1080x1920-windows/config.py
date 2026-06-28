@@ -154,3 +154,18 @@ class Config:
     horus_gold: tuple = (230, 190, 90)       # Eye-of-Horus gold (replaces primary)
     horus_lapis: tuple = (70, 90, 180)       # Deep lapis (replaces secondary)
     horus_bg_color: tuple = (10, 9, 26)      # Deep indigo void behind the scribe
+
+    # ── Thoth RAG (phase 2 — primary-text retrieval) ─────────────────────
+    # Off until you build an index: drop public-domain .txt files into
+    # thoth_corpus/ then run `python thoth_rag.py build`, then flip this on.
+    # Embeddings use the same Ollama server as chat (llm_host/llm_port);
+    # pull the model first:  ollama pull nomic-embed-text
+    thoth_rag_enabled: bool = True
+    thoth_embed_model: str = "nomic-embed-text"
+    thoth_corpus_dir: str = "thoth_corpus"   # Where source .txt files live
+    thoth_index_path: str = "thoth_index.npz"  # Built index (+ .json sidecar)
+    thoth_rag_top_k: int = 2                  # Passages to surface per account
+    thoth_rag_min_score: float = 0.55        # Cosine cutoff — below this, skip
+    thoth_chunk_words: int = 90              # Target words per indexed passage
+    thoth_passage_chars: int = 600           # Hard cap per surfaced passage
+    thoth_rag_timeout: float = 8.0           # Seconds for the query embed call

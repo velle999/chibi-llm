@@ -22,6 +22,7 @@ from voice_output import VoiceOutput
 from data_feeds import DataFeedManager
 from hud_overlay import HUDOverlay
 from memory import PersistentMemory
+from thoth import ThothCorpus
 from vision import Vision, is_vision_request
 from alarm import AlarmManager, is_alarm_request, is_dismiss_word, is_snooze_word, parse_alarm_time
 from config import Config
@@ -364,6 +365,9 @@ class ChibiAvatarApp:
         self.memory.start_conversation()
         self._message_count = 0
 
+        # Thoth's reference corpus (correspondence lexicon + optional text RAG)
+        self.thoth = ThothCorpus(config=self.config)
+
         # Vision
         self.vision = None
         if self.config.vision_enabled:
@@ -612,6 +616,30 @@ class ChibiAvatarApp:
     def _generate_response(self, vision_request=False):
         """Background thread: stream response from LLM."""
         try:
+            # ── Thoth: start the slow RAG fetch up front, concurrently ───────
+            # Retrieval's query-embed is the one network hop on the critical
+            # path, so kick it off now and let it run alongside the journal
+            # write and the local prep below. We join it just before assembling
+            # the scribe's prompt. Only the network retrieval is threaded — the
+            # lexicon is local and stays synchronous so it's never lost if the
+            # embed is slow. No-op (no thread) when RAG is disabled.
+            thoth_thread = None
+            thoth_passages = {"text": ""}
+            dream_text = ""
+            if self.horus_mode:
+                dream_text = next(
+                    (m["content"] for m in reversed(self.conversation)
+                     if m["role"] == "user"), ""
+                )
+                if dream_text and self.thoth.rag is not None:
+                    def _fetch_passages(t=dream_text):
+                        try:
+                            thoth_passages["text"] = self.thoth.retrieve(t)
+                        except Exception as e:
+                            print(f"[Thoth] retrieval failed ({e}); lexicon only.")
+                    thoth_thread = threading.Thread(target=_fetch_passages, daemon=True)
+                    thoth_thread.start()
+
             # Inject live data + memory context
             live_context = self.feeds.get_context()
             memory_context = self.memory.get_context()
@@ -620,9 +648,25 @@ class ChibiAvatarApp:
             if self.horus_mode:
                 extra_system += self.config.horus_system_prompt
                 extra_system += "\n\n" + memory_context
+                # Read the journal BEFORE recording this account, so the current
+                # dream doesn't appear in its own "recent entries" context.
                 dream_ctx = self.memory.get_dream_context()
                 if dream_ctx:
                     extra_system += "\n\n" + dream_ctx
+                # Record the account now, concurrently (memory.save is lock-guarded
+                # + atomic). Done before generation so a recounted dream is never
+                # lost to an LLM hiccup.
+                if dream_text:
+                    threading.Thread(target=self.memory.add_dream_entry,
+                                     args=(dream_text,), daemon=True).start()
+                # Ground the scribe: the lexicon is local + instant; the RAG
+                # passages were fetched in parallel above — join them here.
+                lexicon = self.thoth.lookup(dream_text) if dream_text else ""
+                if thoth_thread is not None:
+                    thoth_thread.join(timeout=self.config.thoth_rag_timeout + 5)
+                grounding = "\n\n".join(p for p in (lexicon, thoth_passages["text"]) if p)
+                if grounding:
+                    extra_system += "\n\n" + grounding
             elif memory_context:
                 extra_system += "\n\n" + memory_context
 
@@ -662,14 +706,7 @@ class ChibiAvatarApp:
 
             self.conversation.append({"role": "assistant", "content": full_response})
             self.is_generating = False
-            # Save Horus journal entry
-            if self.horus_mode and self.conversation:
-                last_user = next(
-                    (m["content"] for m in reversed(self.conversation)
-                     if m["role"] == "user"), ""
-                )
-                if last_user:
-                    self.memory.add_dream_entry(text=last_user)
+            # (the Horus journal entry was recorded up front, concurrently)
             # Track interaction
             self.memory.record_interaction()
             self._message_count += 1

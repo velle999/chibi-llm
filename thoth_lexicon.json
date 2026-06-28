@@ -1,0 +1,285 @@
+{
+  "_about": "Thoth correspondence lexicon. Curated starter set: dream/vision symbols and their associations across the traditions named in the Thoth system prompt. Presented as resonance, never as fixed meaning. Extend freely — add objects to 'symbols'. 'aliases' are matched case-insensitively on word boundaries against what Velle says.",
+  "symbols": [
+    {
+      "symbol": "serpent",
+      "aliases": ["serpent", "snake", "snakes", "ouroboros", "naga", "cobra", "viper", "python"],
+      "correspondences": {
+        "Egyptian": "Wadjet / Uraeus — sovereignty and protection; Apep, the chaos-serpent devoured nightly by Ra",
+        "Hermetic": "Ouroboros — the all-is-one, prime matter cycling end into beginning",
+        "Gnostic": "the Naas — serpent as bringer of gnosis (the Ophite reversal of Eden)",
+        "Kabbalistic": "Nachash; the serpent-path winding down the Tree of Life"
+      }
+    },
+    {
+      "symbol": "eye",
+      "aliases": ["eye", "eyes", "gaze", "watching", "watched", "stare"],
+      "correspondences": {
+        "Egyptian": "the Wedjat (Eye of Horus) — healing and wholeness restored; the Eye of Ra — sovereign, destructive feminine fire",
+        "Hermetic": "the all-seeing Nous, mind perceiving itself",
+        "Gnostic": "the eye of gnosis against the blind Demiurge (Samael, 'the blind god')",
+        "Kabbalistic": "the supernal eyes of Arikh Anpin, an unblinking flow of mercy"
+      }
+    },
+    {
+      "symbol": "water",
+      "aliases": ["water", "flood", "sea", "ocean", "river", "drowning", "rain", "tide", "waves", "deep"],
+      "correspondences": {
+        "Egyptian": "Nun, the primordial waters; the Nile inundation as renewal",
+        "Hermetic": "the moist nature; the watery substance of the Poimandres vision",
+        "Gnostic": "the waters above and below; the descent and baptism of the soul",
+        "Kabbalistic": "Mayim; Chesed as water; the lower waters that wept at separation"
+      }
+    },
+    {
+      "symbol": "sun",
+      "aliases": ["sun", "sunlight", "solar", "dawn", "sunrise", "daylight", "noon"],
+      "correspondences": {
+        "Egyptian": "Ra and the Aten; Khepri the morning becoming, Atum the evening close",
+        "Hermetic": "the visible god, the solar Nous radiating",
+        "Gnostic": "the true Light beyond the rule of the archons",
+        "Kabbalistic": "Tiferet, the Sun at the heart of the Tree, harmonizing the pillars"
+      }
+    },
+    {
+      "symbol": "moon",
+      "aliases": ["moon", "moonlight", "lunar", "crescent", "night sky"],
+      "correspondences": {
+        "Egyptian": "Thoth and Khonsu, keepers of lunar reckoning and the waxing eye",
+        "Hermetic": "the reflective sphere, threshold of generation",
+        "Gnostic": "the sublunar realm ruled by fate (heimarmene)",
+        "Kabbalistic": "Yesod, the Moon, foundation that reflects Tiferet into the world"
+      }
+    },
+    {
+      "symbol": "bird",
+      "aliases": ["bird", "birds", "falcon", "hawk", "flying away", "feather", "feathers", "dove", "raven", "wings"],
+      "correspondences": {
+        "Egyptian": "Horus the falcon; the Ba (soul) as a human-headed bird returning to the body",
+        "Hermetic": "the ascent of the soul shedding its bodily weight",
+        "Gnostic": "the light-spark in flight upward past the powers",
+        "Kabbalistic": "the soul-bird; the wings of the Shekhinah; the nest (qen) on high"
+      }
+    },
+    {
+      "symbol": "lion",
+      "aliases": ["lion", "lioness", "lions", "big cat", "mane"],
+      "correspondences": {
+        "Egyptian": "Sekhmet, the solar lioness of plague and protection; Aker, the twin horizon-lions guarding yesterday and tomorrow",
+        "Hermetic": "fixed fire, the Leonine heat of the work",
+        "Gnostic": "Yaldabaoth the lion-faced (leontoeides) archon-craftsman",
+        "Kabbalistic": "Gevurah, severity; the lion of Judah on the right of the Throne"
+      }
+    },
+    {
+      "symbol": "fire",
+      "aliases": ["fire", "flame", "flames", "burning", "burn", "ash", "ember", "blaze"],
+      "correspondences": {
+        "Egyptian": "the lakes of fire in the Duat that purify or consume the dead",
+        "Hermetic": "the creative, demiurgic fire — the artificer mind",
+        "Gnostic": "purifying flame against the false fire of the archons",
+        "Kabbalistic": "Esh; Gevurah; the consuming flame upon the altar"
+      }
+    },
+    {
+      "symbol": "tree",
+      "aliases": ["tree", "trees", "forest", "branch", "branches", "roots", "orchard"],
+      "correspondences": {
+        "Egyptian": "the ished-tree on which Thoth and Seshat inscribe the king's name; the sycamore of Nut and Hathor",
+        "Hermetic": "the world-tree, the cosmos as a single growth",
+        "Gnostic": "the Tree of Knowledge re-read as a gift of the Light (Ophite)",
+        "Kabbalistic": "Etz Chayim — the Tree of Life itself, ten sefirot in array"
+      }
+    },
+    {
+      "symbol": "ladder",
+      "aliases": ["ladder", "stairs", "staircase", "steps", "climbing", "ascent", "ascending"],
+      "correspondences": {
+        "Egyptian": "the maqet, the ladder set up so the deceased may climb to the sky",
+        "Hermetic": "the planetary ascent, shedding a vice at each sphere",
+        "Gnostic": "the rise through the archontic spheres, a password at each gate",
+        "Kabbalistic": "Jacob's ladder, the sulam joining the worlds, angels going up and down"
+      }
+    },
+    {
+      "symbol": "gold",
+      "aliases": ["gold", "golden", "gilded", "treasure"],
+      "correspondences": {
+        "Egyptian": "the imperishable flesh of the gods",
+        "Hermetic": "the perfected solar metal, end of the Great Work",
+        "Gnostic": "the incorruptible light-substance hidden in matter",
+        "Kabbalistic": "the radiance of Tiferet; the gold of the inner sanctuary"
+      }
+    },
+    {
+      "symbol": "mirror",
+      "aliases": ["mirror", "reflection", "reflected", "my reflection", "double of myself"],
+      "correspondences": {
+        "Egyptian": "the hand-mirror of Hathor — to look in it is to meet the face of the goddess",
+        "Hermetic": "Anthropos seeing his image in the water and falling in love, and so falling",
+        "Gnostic": "Sophia's reflection casting the lower world into being",
+        "Kabbalistic": "the aspaklaria — the clear glass of true vision against the dim glass of dream"
+      }
+    },
+    {
+      "symbol": "death",
+      "aliases": ["death", "dead", "corpse", "dying", "grave", "tomb", "funeral", "buried"],
+      "correspondences": {
+        "Egyptian": "Osiris; the weighing of the heart; the body made imperishable",
+        "Hermetic": "the death of the body releasing the immortal man",
+        "Gnostic": "the body as tomb (soma sema), the spark awaiting release",
+        "Kabbalistic": "mitat neshikah, the death by the kiss; Malkhut's descent and return"
+      }
+    },
+    {
+      "symbol": "child",
+      "aliases": ["child", "baby", "infant", "children", "young boy", "young girl", "newborn"],
+      "correspondences": {
+        "Egyptian": "Harpocrates / Hor-pa-khered, Horus the child, finger to his lips",
+        "Hermetic": "the reborn Nous, the mind made new",
+        "Gnostic": "the divine child, the Light-spark incarnate",
+        "Kabbalistic": "Ben, the Son (Tiferet); Zeir Anpin, the lesser countenance"
+      }
+    },
+    {
+      "symbol": "crown",
+      "aliases": ["crown", "king", "queen", "throne", "ruler", "royal", "diadem"],
+      "correspondences": {
+        "Egyptian": "the pharaoh as living Horus; the union of the Two Lands in the double crown",
+        "Hermetic": "the king as solar vicegerent of the cosmos",
+        "Gnostic": "the kingless generation (genea abasileutos), free of the archons",
+        "Kabbalistic": "Keter, the Crown, the first and highest sefirah"
+      }
+    },
+    {
+      "symbol": "door",
+      "aliases": ["door", "gate", "gateway", "threshold", "doorway", "portal", "locked door"],
+      "correspondences": {
+        "Egyptian": "the gates of the Duat, each with a guardian whose name must be known",
+        "Hermetic": "the planetary gates of the ascent",
+        "Gnostic": "the gates of the aeons, kept by powers demanding the password",
+        "Kabbalistic": "the fifty gates of Binah; the gate of tears that is never shut"
+      }
+    },
+    {
+      "symbol": "mountain",
+      "aliases": ["mountain", "mountains", "summit", "peak", "high place", "cliff", "hill"],
+      "correspondences": {
+        "Egyptian": "the benben, the first mound risen from Nun; Manu and Bakhu, the horizon mountains",
+        "Hermetic": "the ascent to the height, the climb out of the moist below",
+        "Gnostic": "the mountain of revelation where the risen one teaches",
+        "Kabbalistic": "Har, the mountain of the Temple; the soul's ascent to the heights"
+      }
+    },
+    {
+      "symbol": "cave",
+      "aliases": ["cave", "cavern", "underground", "pit", "hole", "tunnel", "abyss", "underworld"],
+      "correspondences": {
+        "Egyptian": "the Duat; the hidden caverns of Sokar in the deep of night",
+        "Hermetic": "the cave of generation into which souls descend",
+        "Gnostic": "the dark hyle, matter as prison of the spark",
+        "Kabbalistic": "the Cave of Machpelah, a doorway to Eden; the depths beneath the Throne"
+      }
+    },
+    {
+      "symbol": "blood",
+      "aliases": ["blood", "bleeding", "bled", "wound", "red liquid"],
+      "correspondences": {
+        "Egyptian": "the blood of Isis (the tyet knot); the red of Set and the desert",
+        "Hermetic": "the vital spirit, life borne in the moist heat",
+        "Gnostic": "soul-substance caught and bound in flesh",
+        "Kabbalistic": "Dam — 'the life is in the blood'; the red of Gevurah"
+      }
+    },
+    {
+      "symbol": "light",
+      "aliases": ["light", "glow", "radiance", "brightness", "shining", "luminous", "bright light"],
+      "correspondences": {
+        "Egyptian": "the first light as Atum emerges from the waters",
+        "Hermetic": "the Light that is the Father and the Nous (Poimandres)",
+        "Gnostic": "the alien Light of the Pleroma, foreign to this world",
+        "Kabbalistic": "Or; the Or Ein Sof; the primordial light stored up for the righteous"
+      }
+    },
+    {
+      "symbol": "darkness",
+      "aliases": ["darkness", "dark", "void", "blackness", "nothing", "empty", "emptiness", "shadow"],
+      "correspondences": {
+        "Egyptian": "Nun before creation; Kek, god of the primordial dark",
+        "Hermetic": "the moist dark nature recoiling as the Light appears",
+        "Gnostic": "the kenoma, the deficiency; the outer darkness",
+        "Kabbalistic": "the tehiru, the void left by the tzimtzum; choshekh"
+      }
+    },
+    {
+      "symbol": "fish",
+      "aliases": ["fish", "fishing", "fishes", "leviathan", "catch"],
+      "correspondences": {
+        "Egyptian": "the abtu and oxyrhynchus fish, ambivalent dwellers of the deep",
+        "Hermetic": "the sign of the moist generative power",
+        "Gnostic": "Ichthys; the netting and gathering of souls",
+        "Kabbalistic": "the letter Nun ('fish'), token of the world to come; Leviathan reserved for the feast"
+      }
+    },
+    {
+      "symbol": "scales",
+      "aliases": ["scales", "balance", "weighing", "weighed", "measured", "judged", "judgement", "judgment", "trial"],
+      "correspondences": {
+        "Egyptian": "the heart weighed against the feather of Ma'at before Osiris",
+        "Hermetic": "the equilibrium of the four elements",
+        "Gnostic": "the reckoning demanded by the archons at each sphere",
+        "Kabbalistic": "the balance of the pillars of mercy and severity (moznayim)"
+      }
+    },
+    {
+      "symbol": "key",
+      "aliases": ["key", "keys", "unlock", "unlocking", "password", "lock"],
+      "correspondences": {
+        "Egyptian": "the ankh, the key of life held to the lips of the dead",
+        "Hermetic": "the key to the mysteries, given only to the prepared",
+        "Gnostic": "the keys and passwords carried past the gatekeepers",
+        "Kabbalistic": "the keys of the gates; the key of David that opens and none shuts"
+      }
+    },
+    {
+      "symbol": "veil",
+      "aliases": ["veil", "veiled", "curtain", "covered face", "hidden face", "mist", "fog"],
+      "correspondences": {
+        "Egyptian": "the veil of Isis — 'no mortal has lifted my veil'",
+        "Hermetic": "the veil of Nature drawn over the mysteries",
+        "Gnostic": "the katapetasma, the veil that hides the Pleroma",
+        "Kabbalistic": "the parochet, the veil before the Holy of Holies"
+      }
+    },
+    {
+      "symbol": "falling",
+      "aliases": ["falling", "fell", "fall", "plummet", "dropping", "sinking", "descent"],
+      "correspondences": {
+        "Egyptian": "the descent into the Duat at the close of day",
+        "Hermetic": "Anthropos who fell through love of his own reflection",
+        "Gnostic": "the fall of Sophia, the spark cast down into matter",
+        "Kabbalistic": "the shevirah, the shattering, and the scattering of the sparks"
+      }
+    },
+    {
+      "symbol": "twins",
+      "aliases": ["twin", "twins", "double", "two of me", "my double", "doppelganger", "the other me"],
+      "correspondences": {
+        "Egyptian": "the ka, one's living double; Shu and Tefnut; Horus and Set in contention",
+        "Hermetic": "'as above, so below' — the two natures of one thing",
+        "Gnostic": "the syzygy of paired aeons; the heavenly Twin who is one's true self",
+        "Kabbalistic": "the pairing of the sefirot; Metatron as the lesser likeness"
+      }
+    },
+    {
+      "symbol": "bridge",
+      "aliases": ["bridge", "crossing", "cross over", "ferry", "ford", "the other side"],
+      "correspondences": {
+        "Egyptian": "the ferryman Mahaf rowing the dead to the Field of Reeds",
+        "Hermetic": "the passage from the moist below to the dry height",
+        "Gnostic": "the crossing of the waters past the powers that bar the way",
+        "Kabbalistic": "crossing the Jordan; the river of light (Nahar di-Nur) before the Throne"
+      }
+    }
+  ]
+}
