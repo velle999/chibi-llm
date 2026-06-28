@@ -14,6 +14,8 @@ Install:
     # capture needs one of:  alsa-utils (arecord)  or  pipewire (pw-record)
 """
 
+import os
+import re
 import threading
 import queue
 import time
@@ -33,6 +35,33 @@ MAX_SPEECH_DURATION = 30.0    # Maximum recording duration
 _BYTES_PER_SAMPLE = 2         # s16le
 
 
+def _resolve_alsa_device():
+    """Pick an ALSA capture device for arecord.
+
+    The bare ALSA ``default`` device is frequently absent on a headless Pi
+    (no card 0 capture), so ``arecord`` exits instantly with "audio open
+    error: No such file or directory" and the recorder appears to "stop
+    unexpectedly". So: honour an explicit ``CHIBI_MIC_DEVICE`` override;
+    otherwise probe ``arecord -l`` and address the first capture card by
+    NAME. The USB index (``hw:3``) drifts across reboots/replugs, but
+    ``plughw:CARD=<name>`` is stable and also converts to s16le @ RATE if the
+    mic can't deliver that natively. Returns None to fall back to ``default``.
+    """
+    override = os.environ.get("CHIBI_MIC_DEVICE")
+    if override:
+        return override
+    try:
+        out = subprocess.run(
+            ["arecord", "-l"], capture_output=True, text=True, timeout=5
+        ).stdout
+    except Exception:
+        return None
+    m = re.search(r"^card \d+: (\S+)", out, re.MULTILINE)
+    if m:
+        return f"plughw:CARD={m.group(1)},DEV=0"
+    return None
+
+
 def _build_capture_cmd():
     """
     Return (argv, name) for a raw-PCM recorder, preferring arecord (ALSA),
@@ -40,14 +69,18 @@ def _build_capture_cmd():
     is installed.
     """
     if shutil.which("arecord"):
-        return ([
+        cmd = [
             "arecord", "-q",
             "-f", "S16_LE",
             "-r", str(RATE),
             "-c", str(CHANNELS),
             "-t", "raw",
-            "-",
-        ], "arecord")
+        ]
+        device = _resolve_alsa_device()
+        if device:
+            cmd += ["-D", device]
+        cmd.append("-")
+        return (cmd, f"arecord ({device or 'default'})")
     if shutil.which("pw-record"):
         return ([
             "pw-record",
