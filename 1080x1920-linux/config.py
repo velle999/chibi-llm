@@ -115,6 +115,12 @@ class Config:
     horus_threshold_start: int = 5     # Hour (24h) when Thoth auto-activates
     horus_threshold_end: int = 8       # Hour (24h) when auto-activation ends
 
+    # When True, the last few journal entries are fed back into the scribe's
+    # prompt as "recent dreams" context. Off by default so each session stays
+    # focused on the current dream — past dreams live in the journal (F2 viewer)
+    # rather than bleeding into the new account.
+    horus_inject_recent_dreams: bool = False
+
     horus_system_prompt: str = (
         "\n\n[ASPECT SHIFT — THOTH MODE ACTIVE]\n"
         "You are now speaking as Thoth, the scribe aspect of this companion. "
@@ -147,6 +153,13 @@ class Config:
         "chibi mode",
         "return to chibi",
         "close the journal",
+    ])
+
+    # Short, exact-match exit commands (the whole message must equal one of
+    # these). Kept separate from the substring phrases above so the word "exit"
+    # spoken *inside* a recounted dream doesn't accidentally close the journal.
+    horus_exit_words: list = field(default_factory=lambda: [
+        "exit", "quit", "done", "stop", "chibi", "wake up",
     ])
 
     # Thoth aspect palette — the scribe sheds the neon cyberpunk skin for

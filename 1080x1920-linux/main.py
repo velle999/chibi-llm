@@ -396,6 +396,13 @@ class ChibiAvatarApp:
         self.horus_mode = False
         self.horus_auto_triggered = False
 
+        # Dream journal viewer (F2 overlay)
+        self.dream_view_open = False
+        self._dream_view_entries: list[dict] = []
+        self.dream_view_index = 0      # selected entry in the list
+        self._dream_detail = False     # True when drilled into one entry
+        self._dream_scroll = 0         # line scroll offset in detail view
+
         # Conversation
         self.conversation: list[dict] = []
         self.response_text = ""
@@ -497,20 +504,205 @@ class ChibiAvatarApp:
         if self.voice_out:
             self.voice_out.speak(closing)
 
+    # ── Dream journal viewer (F2) ────────────────────────────────────────
+    def _open_dream_view(self):
+        """Open the in-app dream history overlay (snapshot, newest first)."""
+        self._dream_view_entries = list(reversed(self.memory.get_dream_entries()))
+        self.dream_view_index = 0
+        self._dream_detail = False
+        self._dream_scroll = 0
+        self.dream_view_open = True
+
+    def _handle_dream_view_key(self, event):
+        """Route keys while the dream overlay is open. Captures all input."""
+        entries = self._dream_view_entries
+        if self._dream_detail:
+            if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE, pygame.K_LEFT):
+                self._dream_detail = False
+                self._dream_scroll = 0
+            elif event.key in (pygame.K_DOWN, pygame.K_j):
+                self._dream_scroll += 1
+            elif event.key in (pygame.K_UP, pygame.K_k):
+                self._dream_scroll = max(0, self._dream_scroll - 1)
+            elif event.key == pygame.K_PAGEDOWN:
+                self._dream_scroll += 12
+            elif event.key == pygame.K_PAGEUP:
+                self._dream_scroll = max(0, self._dream_scroll - 12)
+            return
+        # List navigation
+        if event.key in (pygame.K_ESCAPE, pygame.K_F2):
+            self.dream_view_open = False
+        elif event.key in (pygame.K_DOWN, pygame.K_j):
+            if entries:
+                self.dream_view_index = min(len(entries) - 1, self.dream_view_index + 1)
+        elif event.key in (pygame.K_UP, pygame.K_k):
+            self.dream_view_index = max(0, self.dream_view_index - 1)
+        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_RIGHT):
+            if entries:
+                self._dream_detail = True
+                self._dream_scroll = 0
+
+    @staticmethod
+    def _fmt_dream_ts(iso: str) -> str:
+        """Format an ISO created_at into 'YYYY-MM-DD HH:MM' (best effort)."""
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(iso).strftime("%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            return (iso or "")[:16]
+
+    @staticmethod
+    def _wrap_text(text: str, font, max_width: int) -> list:
+        """Word-wrap text to a pixel width; preserves blank lines."""
+        lines = []
+        for para in (text or "").split("\n"):
+            if not para.strip():
+                lines.append("")
+                continue
+            cur = ""
+            for word in para.split(" "):
+                trial = word if not cur else cur + " " + word
+                if font.size(trial)[0] <= max_width:
+                    cur = trial
+                else:
+                    if cur:
+                        lines.append(cur)
+                    cur = word
+            if cur:
+                lines.append(cur)
+        return lines
+
+    def _draw_dream_journal(self):
+        """Full-screen overlay: list of dreams, or one dream's full text."""
+        W, H = self.config.window_width, self.config.window_height
+        gold = self.config.horus_gold
+        if not hasattr(self, "_dj_title_font"):
+            self._dj_title_font = pygame.font.SysFont("serif", 30, bold=True)
+            self._dj_font = pygame.font.SysFont("monospace", 20)
+            self._dj_small = pygame.font.SysFont("monospace", 15)
+
+        # Dim backdrop
+        panel = pygame.Surface((W, H), pygame.SRCALPHA)
+        panel.fill((*self.config.horus_bg_color, 235))
+        self.screen.blit(panel, (0, 0))
+        pygame.draw.rect(self.screen, gold, (8, 8, W - 16, H - 16), width=2, border_radius=6)
+
+        margin = 28
+        entries = self._dream_view_entries
+
+        title = self._dj_title_font.render("DREAM JOURNAL", True, gold)
+        self.screen.blit(title, (W // 2 - title.get_width() // 2, 28))
+
+        if not entries:
+            empty = self._dj_font.render("No dreams recorded yet.", True, (200, 200, 210))
+            self.screen.blit(empty, (W // 2 - empty.get_width() // 2, H // 2))
+            hint = self._dj_small.render("Esc / F2 to close", True, (150, 150, 165))
+            self.screen.blit(hint, (W // 2 - hint.get_width() // 2, H - 44))
+            return
+
+        idx = max(0, min(self.dream_view_index, len(entries) - 1))
+
+        if self._dream_detail:
+            # ── Detail view ──────────────────────────────────────────────
+            e = entries[idx]
+            hint = self._dj_small.render(
+                "↑/↓ scroll · Esc back", True, (150, 150, 165))
+            self.screen.blit(hint, (W // 2 - hint.get_width() // 2, H - 44))
+
+            header = f"{self._fmt_dream_ts(e.get('created_at',''))}"
+            tone = e.get("emotional_tone", "")
+            if tone:
+                header += f"   · tone: {tone}"
+            hsurf = self._dj_font.render(header, True, gold)
+            self.screen.blit(hsurf, (margin, 78))
+
+            syms = e.get("symbols_flagged") or []
+            top = 110
+            if syms:
+                ssurf = self._dj_small.render(
+                    "symbols: " + ", ".join(str(s) for s in syms), True, (170, 180, 210))
+                self.screen.blit(ssurf, (margin, top))
+                top += 26
+
+            body_top = top + 6
+            line_h = self._dj_font.get_linesize()
+            visible = (H - 60 - body_top) // line_h
+            wrapped = self._wrap_text(e.get("text", ""), self._dj_font, W - 2 * margin)
+            max_scroll = max(0, len(wrapped) - visible)
+            self._dream_scroll = min(self._dream_scroll, max_scroll)
+            for i, line in enumerate(wrapped[self._dream_scroll:self._dream_scroll + visible]):
+                surf = self._dj_font.render(line, True, (225, 225, 235))
+                self.screen.blit(surf, (margin, body_top + i * line_h))
+            if max_scroll:
+                pos = self._dj_small.render(
+                    f"{self._dream_scroll + 1}-"
+                    f"{min(self._dream_scroll + visible, len(wrapped))}/{len(wrapped)}",
+                    True, (150, 150, 165))
+                self.screen.blit(pos, (W - margin - pos.get_width(), 78))
+            return
+
+        # ── List view ────────────────────────────────────────────────────
+        hint = self._dj_small.render(
+            "↑/↓ select · Enter open · Esc/F2 close", True, (150, 150, 165))
+        self.screen.blit(hint, (W // 2 - hint.get_width() // 2, H - 44))
+
+        row_h = 64
+        list_top = 86
+        visible = (H - 70 - list_top) // row_h
+        start = max(0, min(idx - visible // 2, len(entries) - visible))
+        start = max(0, start)
+        for row, e in enumerate(entries[start:start + visible]):
+            ei = start + row
+            y = list_top + row * row_h
+            selected = (ei == idx)
+            if selected:
+                pygame.draw.rect(self.screen, (*gold, 40),
+                                 (margin - 8, y - 4, W - 2 * (margin - 8), row_h - 6),
+                                 border_radius=4)
+                pygame.draw.rect(self.screen, gold,
+                                 (margin - 8, y - 4, W - 2 * (margin - 8), row_h - 6),
+                                 width=1, border_radius=4)
+            meta = self._fmt_dream_ts(e.get("created_at", ""))
+            tone = e.get("emotional_tone", "")
+            if tone:
+                meta += f"   · {tone}"
+            mcol = gold if selected else (190, 175, 120)
+            msurf = self._dj_small.render(meta, True, mcol)
+            self.screen.blit(msurf, (margin, y))
+            preview = (e.get("text", "") or "").replace("\n", " ")
+            while preview and self._dj_font.size(preview)[0] > W - 2 * margin:
+                preview = preview[:-2]
+            if len(preview) < len((e.get("text", "") or "").replace("\n", " ")):
+                preview = preview.rstrip() + "…"
+            psurf = self._dj_font.render(preview, True,
+                                         (235, 235, 245) if selected else (190, 190, 200))
+            self.screen.blit(psurf, (margin, y + 24))
+
+        # Scroll affordance
+        count = self._dj_small.render(
+            f"{idx + 1}/{len(entries)}", True, (150, 150, 165))
+        self.screen.blit(count, (W - margin - count.get_width(), 56))
+
     def _check_horus_triggers(self, text: str) -> bool:
         """
         Check if user input is a Horus mode switch command.
         Returns True if the input was consumed as a command.
         """
         lower = text.lower().strip()
-        for phrase in self.config.horus_exit_phrases:
-            if phrase in lower:
+        if self.horus_mode:
+            # Exit: an exact short command (so "exit"/"done" mentioned inside a
+            # recounted dream doesn't trip it), or an explicit phrase anywhere.
+            if lower in self.config.horus_exit_words or any(
+                p in lower for p in self.config.horus_exit_phrases
+            ):
                 self._exit_horus_mode()
                 return True
+            # While recording, don't let entry phrases swallow the dream text.
+            return False
+        # Not in Horus mode: entry phrases activate it.
         for phrase in self.config.horus_entry_phrases:
             if phrase in lower:
-                if not self.horus_mode:
-                    self._enter_horus_mode(auto=False)
+                self._enter_horus_mode(auto=False)
                 return True
         return False
 
@@ -658,11 +850,14 @@ class ChibiAvatarApp:
             if self.horus_mode:
                 extra_system += self.config.horus_system_prompt
                 extra_system += "\n\n" + memory_context
-                # Read the journal BEFORE recording this account, so the current
-                # dream doesn't appear in its own "recent entries" context.
-                dream_ctx = self.memory.get_dream_context()
-                if dream_ctx:
-                    extra_system += "\n\n" + dream_ctx
+                # Past dreams stay in the journal (F2 viewer), not the prompt, so
+                # the scribe focuses on the current account. Opt back in via config
+                # to fold recent entries into context. Read BEFORE recording this
+                # account so the current dream never appears in its own context.
+                if getattr(self.config, "horus_inject_recent_dreams", False):
+                    dream_ctx = self.memory.get_dream_context()
+                    if dream_ctx:
+                        extra_system += "\n\n" + dream_ctx
                 # Record the account now, concurrently (memory.save is lock-guarded
                 # + atomic). Done before generation so a recounted dream is never
                 # lost to an LLM hiccup.
@@ -1003,7 +1198,15 @@ class ChibiAvatarApp:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
-                elif event.type == pygame.KEYDOWN:
+                    continue
+
+                # Dream journal overlay captures all input while open.
+                if self.dream_view_open:
+                    if event.type == pygame.KEYDOWN:
+                        self._handle_dream_view_key(event)
+                    continue
+
+                if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         self.running = False
                     elif event.key == pygame.K_F1:
@@ -1013,6 +1216,9 @@ class ChibiAvatarApp:
                                 self.voice_in.stop_listening()
                             else:
                                 self.voice_in.start_listening()
+                    elif event.key == pygame.K_F2:
+                        # Open the dream journal viewer
+                        self._open_dream_view()
                     elif self.state == AvatarState.ALARM:
                         # Any keypress dismisses alarm
                         self.alarm.dismiss()
@@ -1160,6 +1366,10 @@ class ChibiAvatarApp:
             self.status_bar.draw(self.screen, self.state, self.llm.connected,
                                  self.voice_in, self.voice_out)
             self.input_box.draw(self.screen)
+
+            # Dream journal viewer sits on top of everything else.
+            if self.dream_view_open:
+                self._draw_dream_journal()
 
             pygame.display.flip()
 
