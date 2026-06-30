@@ -26,7 +26,10 @@
       "Bash(ssh -i ~/.ssh/id_ed25519 velle@raspberrypi.lan 'cd ~/chibi-llm-main && for f in main.py voice_input.py llm_client.py config.py; do cp $f $f.bak.__CMDSUB_OUTPUT__; done && ls -la *.bak.__CMDSUB_OUTPUT__ | awk '\\\\''{print $5, $9}'\\\\''')",
       "Bash(scp -q -i ~/.ssh/id_ed25519 main.py voice_input.py llm_client.py velle@raspberrypi.lan:chibi-llm-main/)",
       "Bash(scp -q -i ~/.ssh/id_ed25519 __TRACKED_VAR__/config.py velle@raspberrypi.lan:chibi-llm-main/config.py)",
-      "Bash(ssh *)"
+      "Bash(ssh *)",
+      "Bash(python3 -m py_compile voice_input.py)",
+      "Bash(scp -q -i ~/.ssh/id_ed25519 voice_input.py velle@raspberrypi.lan:chibi-llm-main/voice_input.py)",
+      "Bash(scp -q -i ~/.ssh/id_ed25519 main.py velle@raspberrypi.lan:chibi-llm-main/main.py)"
     ]
   }
 }

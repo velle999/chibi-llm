@@ -34,6 +34,19 @@ MAX_SPEECH_DURATION = 30.0    # Maximum recording duration
 
 _BYTES_PER_SAMPLE = 2         # s16le
 
+# Whisper-tiny hallucinates these stock phrases on low-level noise / near-silence
+# (TV hum, fan, a cough). They're indistinguishable from real one-word replies by
+# text alone, so we drop any transcription whose normalized form is exactly one of
+# these. Multi-word real speech ("you were right") is unaffected — only the bare
+# phrase matches.
+_NOISE_HALLUCINATIONS = {
+    "", "you", "thank you", "thanks", "thanks for watching",
+    "thank you for watching", "thank you very much", "bye", "bye bye",
+    "please subscribe", "see you next time", "okay", "ok", "uh", "um", "hmm",
+    "subtitles by the amara.org community", "transcription by castingwords",
+    "the", "yeah", "so",
+}
+
 
 def _resolve_alsa_device():
     """Pick an ALSA capture device for arecord.
@@ -94,15 +107,22 @@ def _build_capture_cmd():
 
 
 class VoiceInput:
-    def __init__(self, model_size="tiny", device="cpu", compute_type="int8"):
+    def __init__(self, model_size="tiny", device="cpu", compute_type="int8",
+                 silence_threshold=SILENCE_THRESHOLD,
+                 min_speech_duration=MIN_SPEECH_DURATION):
         """
         model_size: "tiny", "base", "small" — tiny recommended for Pi 4
         device: "cpu" for Pi
         compute_type: "int8" for Pi (fastest), "float32" for accuracy
+        silence_threshold: mean-amplitude floor to start recording. Higher =
+            less sensitive (keeps the TV / room noise from triggering).
+        min_speech_duration: drop captures shorter than this (seconds).
         """
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
+        self.silence_threshold = silence_threshold
+        self.min_speech_duration = min_speech_duration
         self.model = None
         self._proc = None
 
@@ -114,6 +134,9 @@ class VoiceInput:
         # stops Chibi's own TTS from being transcribed and fed back as input.
         self.muted = False
         self.result_queue = queue.Queue()
+        # Throttle the "capture unavailable" log when the mic is missing
+        # (e.g. USB camera unplugged) so it doesn't flood the log file.
+        self._last_capture_err_log = 0.0
 
         self._ready = False
         self._load_thread = threading.Thread(target=self._load_model, daemon=True)
@@ -231,8 +254,24 @@ class VoiceInput:
                         if text and text.strip() and not self.muted:
                             self.result_queue.put(text.strip())
                 except Exception as e:
-                    print(f"[Voice] Error in listen loop: {e}")
-                    time.sleep(1)
+                    # The recorder subprocess died — usually the USB mic was
+                    # unplugged / never enumerated (arecord falls back to a
+                    # non-existent "default" and exits instantly). Tear the dead
+                    # process down and REOPEN the stream so capture self-heals
+                    # when the device comes back, instead of spinning forever on
+                    # a corpse. Log is throttled to once / 30s so a missing mic
+                    # doesn't flood chibi.log.
+                    self._close_stream()
+                    now = time.time()
+                    if now - self._last_capture_err_log > 30:
+                        print(f"[Voice] Audio capture unavailable ({e}); "
+                              f"is the mic plugged in? Retrying until it returns.")
+                        self._last_capture_err_log = now
+                    time.sleep(3)
+                    try:
+                        self._open_stream()
+                    except Exception:
+                        pass  # still gone; back off and retry on the next pass
         finally:
             self._close_stream()
 
@@ -253,7 +292,7 @@ class VoiceInput:
         silent_chunks = 0
         speech_chunks = 0
         silence_limit = int(SILENCE_DURATION * RATE / CHUNK)
-        min_speech_chunks = int(MIN_SPEECH_DURATION * RATE / CHUNK)
+        min_speech_chunks = int(self.min_speech_duration * RATE / CHUNK)
         max_chunks = int(MAX_SPEECH_DURATION * RATE / CHUNK)
         recording = False
 
@@ -265,7 +304,7 @@ class VoiceInput:
                     raise RuntimeError("audio recorder stopped unexpectedly")
                 amplitude = np.abs(audio_array.astype(np.int32)).mean()
 
-                if amplitude > SILENCE_THRESHOLD:
+                if amplitude > self.silence_threshold:
                     if not recording:
                         recording = True
                         self.is_recording = True
@@ -306,10 +345,25 @@ class VoiceInput:
                 vad_parameters=dict(
                     min_silence_duration_ms=500,
                 ),
+                condition_on_previous_text=False,  # don't let prior text seed loops
             )
 
-            text = " ".join(segment.text for segment in segments)
-            return text.strip()
+            text = " ".join(seg.text for seg in segments).strip()
+
+            # Drop bare known-hallucination phrases (normalized: lowercase,
+            # punctuation stripped). Real multi-word speech is untouched.
+            #
+            # NOTE: we deliberately do NOT gate on per-segment avg_logprob /
+            # no_speech_prob. On a marginal mic (the PS3 Eye) those run low for
+            # genuine speech too, which silently ate real input — "records but
+            # never activates". Whisper's own vad_filter plus this phrase list
+            # are enough to suppress the common noise hallucinations.
+            norm = re.sub(r"[^a-z' ]", "", text.lower()).strip()
+            norm = re.sub(r"\s+", " ", norm)
+            if norm in _NOISE_HALLUCINATIONS:
+                return ""
+
+            return text
 
         except Exception as e:
             print(f"[Voice] Transcription error: {e}")

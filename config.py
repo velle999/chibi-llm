@@ -83,18 +83,23 @@ class Config:
                                              # (requires sox: sudo apt install sox libsox-fmt-all)
 
     # Wake-word gating: a voice transcription is only sent to the LLM if it
-    # names Chibi (or a Whisper mishear of it) OR arrives inside the rolling
-    # conversation window opened by the last real exchange. This is the main
-    # thing that stops the TV / ambient chatter from triggering a response.
-    # (Typed input and Horus mode always pass and refresh the window.)
-    wake_word: str = "chibi"
+    # contains the wake word OR arrives inside the rolling conversation window
+    # opened by the last real exchange. This is the main thing that stops the
+    # TV / ambient chatter from triggering a response. (Typed input and Horus
+    # mode always pass and refresh the window.)
+    #
+    # NOTE: the trigger is "computer", NOT "chibi" — Whisper-tiny can't reliably
+    # transcribe the name "Chibi" (it comes out be/TV/CB/baby every time), so a
+    # name-based wake word silently failed. "computer" transcribes essentially
+    # every time. She's still named Chibi; this is only the spoken summon word.
+    wake_word: str = "computer"
     wake_window_seconds: float = 22.0        # Window stays open this long after
                                              # each real exchange for follow-ups.
     # Voice activity detection. Raised from the old 500 so the TV across the
     # room no longer clears the floor — tune per room (higher = less sensitive).
     # min_speech drops brief thumps; mic_echo_cooldown drops Chibi's own TTS tail.
-    vad_silence_threshold: int = 1000
-    vad_min_speech_duration: float = 0.6
+    vad_silence_threshold: int = 500
+    vad_min_speech_duration: float = 0.5
     mic_echo_cooldown: float = 1.0
 
     # ── Weather ──────────────────────────────────────────────────────────
@@ -160,6 +165,9 @@ class Config:
         "3. Ask at most one clarifying question, only if essential.\n"
         "4. Never tell Velle what something means. Hold the mirror; let him read it.\n\n"
         "You record everything. The symbolic language emerging here is sacred data. "
+        "Speak ONLY to dreams, visions, symbols, and the sacred — NEVER markets, "
+        "stocks, crypto, weather, the time, or mundane news, even if such data "
+        "appears in context. "
         "Do not use emoticons. Do not be cute. Be the scribe."
     )
 

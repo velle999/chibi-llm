@@ -134,6 +134,9 @@ class VoiceInput:
         # stops Chibi's own TTS from being transcribed and fed back as input.
         self.muted = False
         self.result_queue = queue.Queue()
+        # Throttle the "capture unavailable" log when the mic is missing
+        # (e.g. USB camera unplugged) so it doesn't flood the log file.
+        self._last_capture_err_log = 0.0
 
         self._ready = False
         self._load_thread = threading.Thread(target=self._load_model, daemon=True)
@@ -251,8 +254,24 @@ class VoiceInput:
                         if text and text.strip() and not self.muted:
                             self.result_queue.put(text.strip())
                 except Exception as e:
-                    print(f"[Voice] Error in listen loop: {e}")
-                    time.sleep(1)
+                    # The recorder subprocess died — usually the USB mic was
+                    # unplugged / never enumerated (arecord falls back to a
+                    # non-existent "default" and exits instantly). Tear the dead
+                    # process down and REOPEN the stream so capture self-heals
+                    # when the device comes back, instead of spinning forever on
+                    # a corpse. Log is throttled to once / 30s so a missing mic
+                    # doesn't flood chibi.log.
+                    self._close_stream()
+                    now = time.time()
+                    if now - self._last_capture_err_log > 30:
+                        print(f"[Voice] Audio capture unavailable ({e}); "
+                              f"is the mic plugged in? Retrying until it returns.")
+                        self._last_capture_err_log = now
+                    time.sleep(3)
+                    try:
+                        self._open_stream()
+                    except Exception:
+                        pass  # still gone; back off and retry on the next pass
         finally:
             self._close_stream()
 
@@ -329,24 +348,16 @@ class VoiceInput:
                 condition_on_previous_text=False,  # don't let prior text seed loops
             )
 
-            # Keep only confident, speech-like segments. Whisper-tiny emits a
-            # high no_speech_prob and a very low avg_logprob when it's
-            # "transcribing" noise — drop those instead of forwarding a
-            # hallucinated phrase to the LLM.
-            kept = []
-            for seg in segments:
-                no_speech = getattr(seg, "no_speech_prob", 0.0)
-                avg_logprob = getattr(seg, "avg_logprob", 0.0)
-                if no_speech > 0.6:
-                    continue
-                if avg_logprob < -1.0:
-                    continue
-                kept.append(seg.text)
-
-            text = " ".join(kept).strip()
+            text = " ".join(seg.text for seg in segments).strip()
 
             # Drop bare known-hallucination phrases (normalized: lowercase,
             # punctuation stripped). Real multi-word speech is untouched.
+            #
+            # NOTE: we deliberately do NOT gate on per-segment avg_logprob /
+            # no_speech_prob. On a marginal mic (the PS3 Eye) those run low for
+            # genuine speech too, which silently ate real input — "records but
+            # never activates". Whisper's own vad_filter plus this phrase list
+            # are enough to suppress the common noise hallucinations.
             norm = re.sub(r"[^a-z' ]", "", text.lower()).strip()
             norm = re.sub(r"\s+", " ", norm)
             if norm in _NOISE_HALLUCINATIONS:

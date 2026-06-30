@@ -60,6 +60,29 @@ def _sounds_like_horus(word: str) -> bool:
         return True
     return len(word) >= 4 and difflib.SequenceMatcher(None, word, "horus").ratio() >= 0.7
 
+
+# Whisper-tiny mishears the wake name "Chibi" almost as much as "Horus". These
+# are the common variants; the fuzzy fallback catches the rest. Used to decide
+# whether a voice line is actually addressed to Chibi (vs. ambient TV chatter).
+_CHIBI_SOUNDALIKES = {
+    "chibi", "chiby", "chibby", "chibbi", "chiba", "chibe", "cheeby", "cheaby",
+    "cheebi", "shibby", "shibi", "shibby", "chevy", "chibbe", "tibby", "chimi",
+    "chippy", "hibi", "kibbe", "chebi",
+}
+
+
+def _sounds_like_chibi(word: str) -> bool:
+    """True if a transcribed word is "chibi" or a likely Whisper-tiny mishear.
+
+    This is the wake-word check: a voice line only reaches the LLM if it names
+    Chibi (or arrives inside the open conversation window). The fuzzy fallback
+    still requires the word to *resemble* "chibi", so random room/TV words
+    don't slip through.
+    """
+    if word in _CHIBI_SOUNDALIKES:
+        return True
+    return len(word) >= 4 and difflib.SequenceMatcher(None, word, "chibi").ratio() >= 0.72
+
 # ─── Avatar States ───────────────────────────────────────────────────────────
 
 class AvatarState(Enum):
@@ -360,6 +383,10 @@ class ChibiAvatarApp:
         self.state = AvatarState.IDLE
         self.state_timer = 0
         self.last_interaction = time.time()
+        # Rolling wake-word window: voice lines are only forwarded to the LLM
+        # while now < _wake_until (opened by naming Chibi or by any typed/real
+        # exchange). 0 = closed, so the very first voice line must say the name.
+        self._wake_until = 0.0
 
         # Components
         self.renderer = ChibiRenderer(self.config)
@@ -382,6 +409,8 @@ class ChibiAvatarApp:
                 model_size=self.config.stt_model,
                 device="cpu",
                 compute_type="int8",
+                silence_threshold=getattr(self.config, "vad_silence_threshold", 1000),
+                min_speech_duration=getattr(self.config, "vad_min_speech_duration", 0.6),
             )
             self.voice_in.start_listening()
 
@@ -493,7 +522,8 @@ class ChibiAvatarApp:
             result = ""
             for chunk in self.llm.stream_chat(
                 [{"role": "user", "content": prompt}],
-                extra_system="You are a memory extraction assistant. Return ONLY valid JSON."
+                extra_system="You are a memory extraction assistant. Return ONLY valid JSON.",
+                num_predict=512,  # JSON extraction needs room; not user-facing chat
             ):
                 result += chunk
             self.memory.process_extraction(result)
@@ -730,10 +760,19 @@ class ChibiAvatarApp:
             cmd = lower.strip(" .,!?\"'")
             words = re.findall(r"[a-z']+", lower)
             is_short = len(words) <= 4
+            # Multi-word exit commands (e.g. "wake up") must be matched as a
+            # SUBSTRING — the per-word check below can't see a two-word phrase,
+            # and Whisper-tiny mangles the spoken name "Chibi" into "CB"/"baby",
+            # so "wake up" is actually the most reliable exit signal. Also accept
+            # chibi-mishears via the fuzzy matcher.
+            multiword_exit = any(
+                " " in ew and ew in lower for ew in self.config.horus_exit_words)
             if (cmd in self.config.horus_exit_words
                     or any(p in lower for p in self.config.horus_exit_phrases)
+                    or (is_short and multiword_exit)
                     or (is_short and any(w in self.config.horus_exit_words
                                          for w in words))
+                    or (is_short and any(_sounds_like_chibi(w) for w in words))
                     or (is_short and words and words[-1] == "mode")):
                 self._exit_horus_mode()
                 return True
@@ -787,8 +826,63 @@ class ChibiAvatarApp:
             self.state = new_state
             self.state_timer = 0
 
+    def _voice_is_addressed(self, text: str) -> bool:
+        """Decide whether a voice transcription should reach Chibi.
+
+        True if (a) we're mid-conversation — inside the rolling wake window
+        opened by the last real exchange, (b) Horus/Thoth mode is active (a
+        deliberate dictation session the user opted into), or (c) the line
+        names Chibi (or a Whisper mishear of it). Everything else — the TV, a
+        passing remark not directed at Chibi — is dropped. This is the primary
+        guard against ambient-noise responses.
+        """
+        if self.alarm.is_ringing:
+            return True  # any voice dismisses a ringing alarm (handled downstream)
+        if time.time() < self._wake_until:
+            return True
+        if self.horus_mode:
+            return True
+        # Wake word — configurable (default "computer"). Whisper-tiny can't
+        # reliably transcribe "Chibi" (it comes out be/TV/CB/baby), so the spoken
+        # trigger is a word the model actually hears. A substring match is safe
+        # for a long, distinct word; the fuzzy pass catches minor mishears
+        # ("computor", "computers") without matching unrelated room/TV speech.
+        lower = text.lower()
+        wake = getattr(self.config, "wake_word", "computer").lower().strip()
+        if wake and wake in lower:
+            return True
+        words = re.findall(r"[a-z']+", lower)
+        return any(
+            len(w) >= 4 and difflib.SequenceMatcher(None, w, wake).ratio() >= 0.8
+            for w in words
+        )
+
+    def _open_wake_window(self):
+        """(Re)open the conversation window so follow-ups don't need the name."""
+        self._wake_until = time.time() + getattr(
+            self.config, "wake_window_seconds", 22.0)
+
+    _LIVE_DATA_KEYWORDS = (
+        "weather", "temp", "temperature", "forecast", "rain", "snow", "storm",
+        "sunny", "cloudy", "hot", "cold", "humid", "wind", "outside",
+        "market", "stock", "stocks", "share", "shares", "price", "crypto",
+        "bitcoin", "btc", "ethereum", "eth", "solana", "nasdaq", "dow", "s&p",
+        "sp500", "ticker", "portfolio",
+        "time", "clock", "date", "day", "today", "tomorrow", "what day",
+    )
+
+    def _wants_live_data(self, text: str) -> bool:
+        """True if the message is plausibly about weather / markets / time, so
+        the live-data block is worth injecting. Keeps it out of every other turn."""
+        t = text.lower()
+        return any(k in t for k in self._LIVE_DATA_KEYWORDS)
+
     def send_message(self, text: str):
         """Send a message to the LLM in a background thread."""
+        # Any accepted input (typed, voice-addressed, command) is a real
+        # interaction — open the conversation window so immediate follow-ups
+        # don't need the wake word again.
+        self._open_wake_window()
         # ── Alarm dismiss/snooze while ringing ───────────────────────────
         if self.alarm.is_ringing:
             if is_snooze_word(text):
@@ -946,7 +1040,15 @@ class ChibiAvatarApp:
                     f"Camera sees: {self.vision.last_description}"
                 )
 
-            if live_context:
+            # Only inject the live weather/market/time block when the latest
+            # message is actually about it. Dumping it every turn is what made
+            # Chibi regurgitate forecasts and tickers unprompted; gating it
+            # removes the temptation entirely for off-topic messages.
+            latest_user = next(
+                (m["content"] for m in reversed(self.conversation)
+                 if m["role"] == "user"), "")
+            if (live_context and not self.horus_mode
+                    and self._wants_live_data(latest_user)):
                 extra_system += (
                     "\n\n--- BACKGROUND REFERENCE DATA (DO NOT mention unless asked) ---\n"
                     "This data is available if Velle asks about weather, time, stocks, or crypto. "
@@ -954,8 +1056,12 @@ class ChibiAvatarApp:
                     + live_context
                 )
 
+            num_predict = (self.config.horus_num_predict if self.horus_mode
+                           else self.config.llm_num_predict)
             full_response = ""
-            for chunk in self.llm.stream_chat(self.conversation, extra_system=extra_system):
+            for chunk in self.llm.stream_chat(self.conversation,
+                                              extra_system=extra_system,
+                                              num_predict=num_predict):
                 full_response += chunk
                 self.response_text = full_response
                 if self.state == AvatarState.THINKING:
@@ -966,6 +1072,9 @@ class ChibiAvatarApp:
 
             self.conversation.append({"role": "assistant", "content": full_response})
             self.is_generating = False
+            # Keep the conversation window open for a beat after Chibi finishes
+            # so Velle's immediate follow-up doesn't need the wake word again.
+            self._open_wake_window()
             # (the Horus journal entry was recorded up front, concurrently)
             # Track interaction
             self.memory.record_interaction()
@@ -1106,8 +1215,13 @@ class ChibiAvatarApp:
 
             transcription = self.voice_in.get_transcription()
             if transcription:
-                print(f"[Voice] Heard: {transcription!r}")
-                self.send_message(transcription)
+                if self._voice_is_addressed(transcription):
+                    print(f"[Voice] Heard: {transcription!r}")
+                    self.send_message(transcription)
+                else:
+                    # Not addressed and the conversation window is closed —
+                    # almost always the TV / ambient chatter. Drop it silently.
+                    print(f"[Voice] Ignored (not addressed): {transcription!r}")
         elif self.voice_in and not mic_safe:
             # Drain any transcriptions that came in while speaking (they're just echo)
             while self.voice_in.get_transcription() is not None:

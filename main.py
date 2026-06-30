@@ -769,10 +769,19 @@ class ChibiAvatarApp:
             cmd = lower.strip(" .,!?\"'")
             words = re.findall(r"[a-z']+", lower)
             is_short = len(words) <= 4
+            # Multi-word exit commands (e.g. "wake up") must be matched as a
+            # SUBSTRING — the per-word check below can't see a two-word phrase,
+            # and Whisper-tiny mangles the spoken name "Chibi" into "CB"/"baby",
+            # so "wake up" is actually the most reliable exit signal. Also accept
+            # chibi-mishears via the fuzzy matcher.
+            multiword_exit = any(
+                " " in ew and ew in lower for ew in self.config.horus_exit_words)
             if (cmd in self.config.horus_exit_words
                     or any(p in lower for p in self.config.horus_exit_phrases)
+                    or (is_short and multiword_exit)
                     or (is_short and any(w in self.config.horus_exit_words
                                          for w in words))
+                    or (is_short and any(_sounds_like_chibi(w) for w in words))
                     or (is_short and words and words[-1] == "mode")):
                 self._exit_horus_mode()
                 return True
@@ -842,8 +851,20 @@ class ChibiAvatarApp:
             return True
         if self.horus_mode:
             return True
-        words = re.findall(r"[a-z']+", text.lower())
-        return any(_sounds_like_chibi(w) for w in words)
+        # Wake word — configurable (default "computer"). Whisper-tiny can't
+        # reliably transcribe "Chibi" (it comes out be/TV/CB/baby), so the spoken
+        # trigger is a word the model actually hears. A substring match is safe
+        # for a long, distinct word; the fuzzy pass catches minor mishears
+        # ("computor", "computers") without matching unrelated room/TV speech.
+        lower = text.lower()
+        wake = getattr(self.config, "wake_word", "computer").lower().strip()
+        if wake and wake in lower:
+            return True
+        words = re.findall(r"[a-z']+", lower)
+        return any(
+            len(w) >= 4 and difflib.SequenceMatcher(None, w, wake).ratio() >= 0.8
+            for w in words
+        )
 
     def _open_wake_window(self):
         """(Re)open the conversation window so follow-ups don't need the name."""
@@ -1039,7 +1060,8 @@ class ChibiAvatarApp:
             latest_user = next(
                 (m["content"] for m in reversed(self.conversation)
                  if m["role"] == "user"), "")
-            if live_context and self._wants_live_data(latest_user):
+            if (live_context and not self.horus_mode
+                    and self._wants_live_data(latest_user)):
                 extra_system += (
                     "\n\n--- BACKGROUND REFERENCE DATA (DO NOT mention unless asked) ---\n"
                     "This data is available if Velle asks about weather, time, stocks, or crypto. "

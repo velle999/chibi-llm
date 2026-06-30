@@ -9,6 +9,7 @@ Install:
     pip install faster-whisper sounddevice numpy
 """
 
+import re
 import threading
 import queue
 import time
@@ -23,12 +24,28 @@ SILENCE_DURATION = 1.5
 MIN_SPEECH_DURATION = 0.5
 MAX_SPEECH_DURATION = 30.0
 
+# Whisper-tiny hallucinates these stock phrases on low-level noise / near-silence
+# (TV hum, fan, a cough). They're indistinguishable from real one-word replies by
+# text alone, so we drop any transcription whose normalized form is exactly one of
+# these. Multi-word real speech ("you were right") is unaffected.
+_NOISE_HALLUCINATIONS = {
+    "", "you", "thank you", "thanks", "thanks for watching",
+    "thank you for watching", "thank you very much", "bye", "bye bye",
+    "please subscribe", "see you next time", "okay", "ok", "uh", "um", "hmm",
+    "subtitles by the amara.org community", "transcription by castingwords",
+    "the", "yeah", "so",
+}
+
 
 class VoiceInput:
-    def __init__(self, model_size="tiny", device="cpu", compute_type="int8"):
+    def __init__(self, model_size="tiny", device="cpu", compute_type="int8",
+                 silence_threshold=SILENCE_THRESHOLD,
+                 min_speech_duration=MIN_SPEECH_DURATION):
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
+        self.silence_threshold = silence_threshold
+        self.min_speech_duration = min_speech_duration
         self.model = None
 
         self.is_listening = False
@@ -231,7 +248,7 @@ class VoiceInput:
         chunk_ms = 64
         chunk_samples = max(512, int(self._mic_rate * chunk_ms / 1000))
         silence_chunks = int(SILENCE_DURATION * 1000 / chunk_ms)
-        min_speech = int(MIN_SPEECH_DURATION * 1000 / chunk_ms)
+        min_speech = int(self.min_speech_duration * 1000 / chunk_ms)
         max_speech = int(MAX_SPEECH_DURATION * 1000 / chunk_ms)
 
         # Clear audio queue
@@ -280,7 +297,7 @@ class VoiceInput:
 
                 amplitude = np.abs(audio).mean()
 
-                if amplitude > SILENCE_THRESHOLD:
+                if amplitude > self.silence_threshold:
                     if not recording:
                         recording = True
                         self.is_recording = True
@@ -332,8 +349,24 @@ class VoiceInput:
                 language="en",
                 vad_filter=True,
                 vad_parameters=dict(min_silence_duration_ms=500),
+                condition_on_previous_text=False,  # don't let prior text seed loops
             )
-            return " ".join(s.text for s in segments).strip()
+            # Keep only confident, speech-like segments — Whisper-tiny emits a
+            # high no_speech_prob / very low avg_logprob when "transcribing"
+            # noise; drop those instead of forwarding a hallucinated phrase.
+            kept = []
+            for seg in segments:
+                if getattr(seg, "no_speech_prob", 0.0) > 0.6:
+                    continue
+                if getattr(seg, "avg_logprob", 0.0) < -1.0:
+                    continue
+                kept.append(seg.text)
+            text = " ".join(kept).strip()
+            norm = re.sub(r"[^a-z' ]", "", text.lower()).strip()
+            norm = re.sub(r"\s+", " ", norm)
+            if norm in _NOISE_HALLUCINATIONS:
+                return ""
+            return text
         except Exception as e:
             print(f"[Voice] Transcription error: {e}")
             return ""
