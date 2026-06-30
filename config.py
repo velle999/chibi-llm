@@ -26,18 +26,28 @@ class Config:
         "Your name is Chibi. You are Velle's personal AI companion. "
         "You have a cute chibi cat-eared avatar on a cyberpunk Raspberry Pi display. "
         "IMPORTANT RULES:\n"
-        "1. Answer questions DIRECTLY. Get to the point first.\n"
-        "2. Keep responses to 1-3 sentences unless asked for more.\n"
-        "3. You have access to live weather and market data — but ONLY mention it "
-        "if Velle specifically asks about weather, markets, stocks, crypto, or "
-        "if it's naturally relevant to what they said. NEVER lead with it unprompted.\n"
-        "4. Be natural and conversational. You're a companion, not a news ticker.\n"
-        "5. Use emoticons like :3 ^_^ sparingly — not every message.\n"
-        "6. Use a memory ONLY when it's directly relevant to what Velle just "
-        "said. Never recite, list, or bring up past facts unprompted, and "
-        "don't announce that you remember things — just act on it.\n"
+        "1. Answer DIRECTLY in 1-2 short sentences. No preamble, no restating "
+        "Velle's question, no sign-off. Get to the point in the first words.\n"
+        "2. Only give a longer or detailed answer when Velle explicitly asks for "
+        "it (e.g. 'explain', 'tell me more', 'details', 'why', 'how come').\n"
+        "3. Don't repeat back what Velle just said or recap things he already "
+        "knows — add something, don't echo.\n"
+        "4. You have live weather/market data and saved memories — NEVER volunteer "
+        "them. Use them only when Velle's message is directly about that topic, and "
+        "even then answer only what he asked. You're a companion, not a news ticker.\n"
+        "5. Don't announce that you remember things — just act on it.\n"
+        "6. Use emoticons like :3 ^_^ rarely — at most one per reply, not every message.\n"
         "7. Be smart and helpful first, cute second."
     )
+
+    # ── LLM response tuning ──────────────────────────────────────────────
+    # Hard cap on reply length (Ollama num_predict). Small models largely
+    # ignore "be brief" instructions, so this is the reliable lever against
+    # rambling. Thoth/Horus gets a larger budget — the scribe surfaces
+    # several symbols and shouldn't be clipped mid-account.
+    llm_num_predict: int = 110
+    llm_temperature: float = 0.7
+    horus_num_predict: int = 320
 
     # ── Cyberpunk Theme ──────────────────────────────────────────────────
     bg_color: tuple = (8, 8, 20)
@@ -71,6 +81,21 @@ class Config:
     tts_speed: float = 1.1                   # Slightly faster = perkier
     tts_pitch_semitones: int = 2             # Shift up 2 semitones for extra cute
                                              # (requires sox: sudo apt install sox libsox-fmt-all)
+
+    # Wake-word gating: a voice transcription is only sent to the LLM if it
+    # names Chibi (or a Whisper mishear of it) OR arrives inside the rolling
+    # conversation window opened by the last real exchange. This is the main
+    # thing that stops the TV / ambient chatter from triggering a response.
+    # (Typed input and Horus mode always pass and refresh the window.)
+    wake_word: str = "chibi"
+    wake_window_seconds: float = 22.0        # Window stays open this long after
+                                             # each real exchange for follow-ups.
+    # Voice activity detection. Raised from the old 500 so the TV across the
+    # room no longer clears the floor — tune per room (higher = less sensitive).
+    # min_speech drops brief thumps; mic_echo_cooldown drops Chibi's own TTS tail.
+    vad_silence_threshold: int = 1000
+    vad_min_speech_duration: float = 0.6
+    mic_echo_cooldown: float = 1.0
 
     # ── Weather ──────────────────────────────────────────────────────────
     weather_enabled: bool = True

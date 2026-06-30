@@ -34,18 +34,28 @@ class LLMClient:
         except Exception:
             self.connected = False
 
-    def stream_chat(self, messages: list[dict], extra_system: str = ""):
-        """Generator that yields text chunks from the LLM."""
+    def stream_chat(self, messages: list[dict], extra_system: str = "",
+                    num_predict: int | None = None):
+        """Generator that yields text chunks from the LLM.
+
+        num_predict caps the reply length (Ollama). None falls back to the
+        configured llm_num_predict; callers pass a larger value for modes
+        that legitimately need a longer answer (e.g. the Thoth scribe).
+        """
         max_msgs = self.config.max_conversation_history
         if len(messages) > max_msgs:
             messages = messages[-max_msgs:]
 
-        if self.config.llm_backend == "ollama":
-            yield from self._stream_ollama(messages, extra_system)
-        else:
-            yield from self._stream_llamacpp(messages, extra_system)
+        if num_predict is None:
+            num_predict = getattr(self.config, "llm_num_predict", 110)
 
-    def _stream_ollama(self, messages: list[dict], extra_system: str = ""):
+        if self.config.llm_backend == "ollama":
+            yield from self._stream_ollama(messages, extra_system, num_predict)
+        else:
+            yield from self._stream_llamacpp(messages, extra_system, num_predict)
+
+    def _stream_ollama(self, messages: list[dict], extra_system: str = "",
+                       num_predict: int = 110):
         """Stream from Ollama /api/chat — line-buffered for reliability."""
         url = f"{self.base_url}/api/chat"
 
@@ -58,6 +68,10 @@ class LLMClient:
             "model": self.config.llm_model,
             "messages": full_messages,
             "stream": True,
+            "options": {
+                "num_predict": num_predict,
+                "temperature": getattr(self.config, "llm_temperature", 0.7),
+            },
         }).encode("utf-8")
 
         req = urllib.request.Request(url, data=payload, method="POST")
@@ -100,7 +114,8 @@ class LLMClient:
                 except Exception:
                     pass
 
-    def _stream_llamacpp(self, messages: list[dict], extra_system: str = ""):
+    def _stream_llamacpp(self, messages: list[dict], extra_system: str = "",
+                         num_predict: int = 110):
         """Stream from llama.cpp /completion endpoint."""
         url = f"{self.base_url}/completion"
 
@@ -113,8 +128,8 @@ class LLMClient:
         payload = json.dumps({
             "prompt": prompt,
             "stream": True,
-            "n_predict": 256,
-            "temperature": 0.8,
+            "n_predict": num_predict,
+            "temperature": getattr(self.config, "llm_temperature", 0.7),
             "stop": ["<|im_end|>", "<|im_start|>"],
         }).encode("utf-8")
 

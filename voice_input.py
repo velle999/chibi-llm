@@ -34,6 +34,19 @@ MAX_SPEECH_DURATION = 30.0    # Maximum recording duration
 
 _BYTES_PER_SAMPLE = 2         # s16le
 
+# Whisper-tiny hallucinates these stock phrases on low-level noise / near-silence
+# (TV hum, fan, a cough). They're indistinguishable from real one-word replies by
+# text alone, so we drop any transcription whose normalized form is exactly one of
+# these. Multi-word real speech ("you were right") is unaffected — only the bare
+# phrase matches.
+_NOISE_HALLUCINATIONS = {
+    "", "you", "thank you", "thanks", "thanks for watching",
+    "thank you for watching", "thank you very much", "bye", "bye bye",
+    "please subscribe", "see you next time", "okay", "ok", "uh", "um", "hmm",
+    "subtitles by the amara.org community", "transcription by castingwords",
+    "the", "yeah", "so",
+}
+
 
 def _resolve_alsa_device():
     """Pick an ALSA capture device for arecord.
@@ -94,15 +107,22 @@ def _build_capture_cmd():
 
 
 class VoiceInput:
-    def __init__(self, model_size="tiny", device="cpu", compute_type="int8"):
+    def __init__(self, model_size="tiny", device="cpu", compute_type="int8",
+                 silence_threshold=SILENCE_THRESHOLD,
+                 min_speech_duration=MIN_SPEECH_DURATION):
         """
         model_size: "tiny", "base", "small" — tiny recommended for Pi 4
         device: "cpu" for Pi
         compute_type: "int8" for Pi (fastest), "float32" for accuracy
+        silence_threshold: mean-amplitude floor to start recording. Higher =
+            less sensitive (keeps the TV / room noise from triggering).
+        min_speech_duration: drop captures shorter than this (seconds).
         """
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
+        self.silence_threshold = silence_threshold
+        self.min_speech_duration = min_speech_duration
         self.model = None
         self._proc = None
 
@@ -253,7 +273,7 @@ class VoiceInput:
         silent_chunks = 0
         speech_chunks = 0
         silence_limit = int(SILENCE_DURATION * RATE / CHUNK)
-        min_speech_chunks = int(MIN_SPEECH_DURATION * RATE / CHUNK)
+        min_speech_chunks = int(self.min_speech_duration * RATE / CHUNK)
         max_chunks = int(MAX_SPEECH_DURATION * RATE / CHUNK)
         recording = False
 
@@ -265,7 +285,7 @@ class VoiceInput:
                     raise RuntimeError("audio recorder stopped unexpectedly")
                 amplitude = np.abs(audio_array.astype(np.int32)).mean()
 
-                if amplitude > SILENCE_THRESHOLD:
+                if amplitude > self.silence_threshold:
                     if not recording:
                         recording = True
                         self.is_recording = True
@@ -306,10 +326,33 @@ class VoiceInput:
                 vad_parameters=dict(
                     min_silence_duration_ms=500,
                 ),
+                condition_on_previous_text=False,  # don't let prior text seed loops
             )
 
-            text = " ".join(segment.text for segment in segments)
-            return text.strip()
+            # Keep only confident, speech-like segments. Whisper-tiny emits a
+            # high no_speech_prob and a very low avg_logprob when it's
+            # "transcribing" noise — drop those instead of forwarding a
+            # hallucinated phrase to the LLM.
+            kept = []
+            for seg in segments:
+                no_speech = getattr(seg, "no_speech_prob", 0.0)
+                avg_logprob = getattr(seg, "avg_logprob", 0.0)
+                if no_speech > 0.6:
+                    continue
+                if avg_logprob < -1.0:
+                    continue
+                kept.append(seg.text)
+
+            text = " ".join(kept).strip()
+
+            # Drop bare known-hallucination phrases (normalized: lowercase,
+            # punctuation stripped). Real multi-word speech is untouched.
+            norm = re.sub(r"[^a-z' ]", "", text.lower()).strip()
+            norm = re.sub(r"\s+", " ", norm)
+            if norm in _NOISE_HALLUCINATIONS:
+                return ""
+
+            return text
 
         except Exception as e:
             print(f"[Voice] Transcription error: {e}")
