@@ -76,6 +76,16 @@ class PersistentMemory:
             self.dream_entries = data.get("dream_entries", [])
             self.stats = data.get("stats", self.stats)
             self.user_name = data.get("user_name", "")
+            # Age out stale summaries (ISO timestamps compare lexicographically;
+            # entries without a timestamp are kept).
+            cutoff = (datetime.now()
+                      - timedelta(days=MAX_SUMMARY_AGE_DAYS)).isoformat()
+            before = len(self.summaries)
+            self.summaries = [s for s in self.summaries
+                              if s.get("created_at", cutoff) >= cutoff]
+            if len(self.summaries) < before:
+                print(f"[Memory] Aged out {before - len(self.summaries)} "
+                      f"summaries older than {MAX_SUMMARY_AGE_DAYS} days")
             print(f"[Memory] Loaded: {len(self.facts)} facts, "
                   f"{len(self.summaries)} summaries, {len(self.notes)} notes, "
                   f"{len(self.dream_entries)} dream entries")
@@ -192,12 +202,15 @@ class PersistentMemory:
     # ─── Stats Tracking ──────────────────────────────────────────────────
 
     def record_interaction(self):
-        """Record that an interaction happened."""
+        """Record that an interaction happened (and persist — stats-only
+        sessions used to lose their counts on exit)."""
         now = datetime.now().isoformat()
-        self.stats["total_messages"] = self.stats.get("total_messages", 0) + 1
-        if not self.stats.get("first_interaction"):
-            self.stats["first_interaction"] = now
-        self.stats["last_interaction"] = now
+        with self._lock:
+            self.stats["total_messages"] = self.stats.get("total_messages", 0) + 1
+            if not self.stats.get("first_interaction"):
+                self.stats["first_interaction"] = now
+            self.stats["last_interaction"] = now
+        self.save()
 
     def start_conversation(self):
         """Record start of a new conversation session."""

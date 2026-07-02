@@ -7,7 +7,9 @@ A kawaii AI companion that lives on your Raspberry Pi 4. Chibi is a voice-intera
 ## Features
 
 - **Kawaii chibi avatar** — procedurally drawn with Pygame, cat ears, star-pupil eyes, floating hearts/sparkles, expressive animations across 8 states
-- **Voice conversation** — Whisper STT + Piper TTS with a cute pitched-up British voice
+- **Voice conversation** — Whisper STT + Piper TTS with a cute pitched-up British voice; responses are spoken sentence-by-sentence as they stream from the LLM
+- **Wake word** — say **"computer"** to get Chibi's attention (Whisper-tiny can't reliably hear "Chibi"; a custom openWakeWord model can bring the real name back — see `oww_enabled` in config). After any exchange a short conversation window stays open so follow-ups don't need the wake word
+- **Soul system** — persistent mood and relationship arc (`~/.chibi-soul.json`): milestones and chat streaks, emotional mirroring, topic callbacks, and spontaneous impulses (morning greetings, storm excitement, "you've been in that app for 2 hours"). Optional extras: system monitoring (psutil), screen awareness (off by default), and calendar reminders via an ICS URL
 - **Persistent memory** — remembers your name, preferences, and past conversations across restarts
 - **Weather awareness** — live weather with reactive background (rain, snow, lightning effects)
 - **Market dashboard** — scrolling stock/crypto ticker, Fear & Greed index
@@ -23,22 +25,17 @@ Thoth is Chibi's second soul aspect — a quieter, more oracular presence that s
 
 #### Activation
 
-Invoke Thoth directly by name or by context:
+Enter Thoth by voice or keyboard:
 
-- *"Thoth, I had a dream about—"*
-- *"Switch to Thoth mode"*
-- *"Analyze this symbol"*
-- *"Dream journal entry:"*
+- *"Horus mode"* / *"enter horus mode"* / *"Thoth"* / *"I had a dream"* / *"open the journal"*
+- Any short utterance ending in "mode" also works — Whisper-tiny mangles the spoken name "Horus" (horse/chorus/forest...), so the mode suffix is the reliable trigger
+- Thoth auto-activates during the threshold hours (5–8am by default, `horus_threshold_start/end`) — the veil-thin window right after waking
 
-Chibi will acknowledge the shift visually (avatar dims to a cooler palette, reduced particle activity) and audibly (slower TTS cadence, lower pitch offset). Say *"come back, Chibi"* or *"exit Thoth"* to return to normal mode.
+The scene shifts to gold-on-indigo with a faint Eye of Horus watermark. Exit with a short *"exit"*, *"done"*, *"wake up"*, *"chibi"*, or *"chibi mode"* (exit only matches short utterances, so saying "exit" inside a recounted dream won't close the journal).
 
 #### Dream & Vision Journal
 
-Thoth maintains a persistent dream journal at `~/.chibi-thoth-journal.json`. Entries are timestamped and tagged automatically with extracted symbols, emotional tone, and cross-session recurrence patterns. You can:
-
-- Dictate entries by voice or type them
-- Ask Thoth to surface recurring symbols across past entries (*"what keeps appearing in my dreams"*)
-- Request a weekly or monthly pattern summary
+Dream entries are stored in `~/.chibi-avatar-memory.json` alongside long-term memory — timestamped, append-only, never trimmed. Press **F2** to browse the journal on-screen (arrow keys to navigate, Enter to read an entry). With `dream_sync_enabled`, the journal union-merges with a peer chibi instance over the LAN, so both machines converge on the same history.
 
 #### Cross-Tradition Symbolic Pattern Engine
 
@@ -56,17 +53,18 @@ When a symbol appears in a journal entry or is submitted directly, Thoth returns
 
 #### Architecture
 
-Thoth lives inside Chibi's existing soul system as a named aspect with its own system prompt overlay, memory partition, and response style profile. The soul system selects the active aspect based on invocation signals and passes the relevant journal context and symbolic schema into the LLM call. No second model is required — Thoth is a behavioral layer on the same Ollama backend, though a larger or reasoning-capable model swap is supported via config if you want heavier symbolic synthesis.
+Thoth is a behavioral aspect on the same Ollama backend — a system prompt overlay plus grounding data, no second model required. Two layers feed the scribe:
 
 ```
 chibi-llm/
-├── horus/
-│   ├── thoth.py          # Aspect controller, mode switching, journal I/O
-│   ├── symbols.py        # Cross-tradition schema and pattern engine
-│   ├── journal.py        # Dream/vision entry storage and retrieval
-│   └── prompts/
-│       └── thoth.txt     # Thoth system prompt overlay
+├── thoth.py             # Correspondence lexicon — symbols in the account
+│                        #   mapped across the five traditions (thoth_lexicon.json)
+├── thoth_rag.py         # Primary-text RAG — embeds public-domain sources
+│   └── thoth_corpus/    #   (Hermetica, Book of the Dead, Kybalion, ...) via
+│                        #   nomic-embed-text on the same Ollama server
 ```
+
+Build the RAG index once with `ollama pull nomic-embed-text && python thoth_rag.py build`; everything degrades gracefully to the lexicon (and then to the model's own knowledge) when the index or server is unavailable.
 
 ## Quick Start
 
@@ -90,9 +88,11 @@ bash setup.sh
 Or manually:
 ```bash
 sudo apt update
-sudo apt install -y python3-pygame portaudio19-dev espeak sox libsox-fmt-all alsa-utils
+sudo apt install -y python3-pygame espeak sox libsox-fmt-all alsa-utils
 
-pip install piper-tts faster-whisper pyaudio yfinance requests opencv-python-headless --break-system-packages
+# NOTE: no PortAudio/PyAudio — audio capture streams from arecord/pw-record
+# subprocesses (pipewire-jack can segfault the process via libportaudio).
+pip install -r requirements.txt --break-system-packages
 
 # Download Chibi's voice
 mkdir -p ~/.local/share/piper-voices
@@ -113,26 +113,31 @@ python3 main.py
 |-------|--------|
 | Type + Enter | Send text message |
 | F1 | Toggle microphone |
+| F2 | Dream journal viewer (↑/↓ navigate, Enter read, Esc close) |
 | Escape | Quit |
 | Any key during alarm | Dismiss alarm |
 
-Voice commands work naturally — just talk.
+Voice: say **"computer"** (the wake word) to address Chibi, then talk naturally — the conversation window stays open for follow-ups after each exchange. Ambient speech and the TV are ignored while the window is closed.
 
 ## Project Structure
 
 ```
 chibi-llm/
 ├── main.py              # App core, state machine, event loop, draw
-├── config.py            # All settings in one place
+├── config.py            # All settings in one place (+ config.local.py overrides)
 ├── sprite_renderer.py   # Kawaii chibi character (procedural)
-├── llm_client.py        # Ollama/llama.cpp streaming client
-├── voice_input.py       # Whisper speech-to-text
+├── llm_client.py        # Ollama/llama.cpp streaming client + health check
+├── voice_input.py       # Whisper STT (arecord/pw-record capture, optional openWakeWord)
 ├── voice_output.py      # Piper TTS with pitch shifting
-├── data_feeds.py        # Weather + market data fetchers
+├── soul.py              # Inner life: mood, milestones, impulses, system/calendar awareness
+├── data_feeds.py        # Weather + market + news fetchers
 ├── hud_overlay.py       # Weather panel, scrolling ticker, mini panel
-├── memory.py            # Persistent long-term memory
-├── vision.py            # PS3 Eye webcam + multimodal LLM
-├── alarm.py             # Natural language alarm system
+├── memory.py            # Persistent long-term memory + dream journal storage
+├── thoth.py             # Thoth correspondence lexicon
+├── thoth_rag.py         # Thoth primary-text retrieval (build + query)
+├── dream_sync.py        # LAN dream-journal sync between chibi instances
+├── vision.py            # PS3 Eye webcam + multimodal LLM (motion-gated awareness)
+├── alarm.py             # Natural language alarms (one-shot + repeating)
 ├── setup.sh             # One-shot Pi installer
 └── README.md
 ```
@@ -192,7 +197,15 @@ Ask Chibi to look: *"what do you see"*, *"how do I look"*, *"read this"*
 | `alarm_speak_interval` | `8.0` | Seconds between wake-up messages |
 | `alarm_snooze_minutes` | `5` | Snooze duration |
 
-Set alarms naturally: *"wake me up at 7am"*, *"set alarm for 6:30"*, *"alarm in 30 minutes"*. Dismiss with any keypress or voice. Say *"snooze"* for 5 more minutes.
+Set alarms naturally: *"wake me up at 7am"*, *"set alarm for 6:30"*, *"alarm in 30 minutes"*, *"set a timer for 20 minutes"*. Repeating alarms work too: *"wake me at 7 every weekday"*, *"alarm at 9 every saturday"*. Dismiss with any keypress or voice. Say *"snooze"* for 5 more minutes.
+
+### Soul
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `soul_enabled` | `True` | Mood, milestones, spontaneous impulses |
+| `impulse_min_interval` | `300` | Min seconds between unprompted remarks |
+| `screen_awareness_enabled` | `False` | Screenshot → vision model (opt-in) |
+| `calendar_ics_url` | `""` | ICS URL for event awareness + reminders |
 
 ## Avatar States
 

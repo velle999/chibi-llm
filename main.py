@@ -33,9 +33,12 @@ from voice_output import VoiceOutput
 from data_feeds import DataFeedManager
 from hud_overlay import HUDOverlay
 from memory import PersistentMemory
+from soul import Soul
 from thoth import ThothCorpus
 from vision import Vision, is_vision_request
-from alarm import AlarmManager, is_alarm_request, is_dismiss_word, is_snooze_word, parse_alarm_time
+from alarm import (AlarmManager, is_alarm_request, is_dismiss_word,
+                   is_snooze_word, parse_alarm_time, parse_alarm_repeat,
+                   align_to_repeat_days, describe_repeat_days)
 from config import Config
 
 # Whisper-tiny frequently mishears the spoken name "Horus". Any of these single
@@ -397,6 +400,8 @@ class ChibiAvatarApp:
         self.input_box = InputBox(self.config)
         self.status_bar = StatusBar(self.config)
         self.llm = LLMClient(self.config)
+        # Background ping so the status dot stays honest between messages
+        self.llm.start_health_check()
 
         # Voice
         self.voice_in = None
@@ -413,6 +418,9 @@ class ChibiAvatarApp:
                 compute_type="int8",
                 silence_threshold=getattr(self.config, "vad_silence_threshold", 1000),
                 min_speech_duration=getattr(self.config, "vad_min_speech_duration", 0.6),
+                oww_enabled=getattr(self.config, "oww_enabled", False),
+                oww_model=getattr(self.config, "oww_model", ""),
+                oww_threshold=getattr(self.config, "oww_threshold", 0.5),
             )
             self.voice_in.start_listening()
 
@@ -428,6 +436,21 @@ class ChibiAvatarApp:
         self.memory = PersistentMemory()
         self.memory.start_conversation()
         self._message_count = 0
+
+        # Soul — persistent mood, relationship arc, spontaneous impulses
+        self.soul = None
+        if getattr(self.config, "soul_enabled", True):
+            self.soul = Soul(self.config)
+            # Seed relationship stats from long-term memory on first run so an
+            # old friendship isn't greeted with "our first conversation!"
+            st = self.memory.stats
+            self.soul.adopt_history(st.get("total_messages", 0),
+                                    st.get("first_interaction") or "")
+        self._soul_feed_timer = 0.0
+        self._last_impulse_spoken = 0.0
+        self._prev_weather_condition = ""
+        self._prev_news_updated = ""
+        self._market_alerts: dict[str, float] = {}
 
         # Dream journal sync with the peer chibi instance over the LAN
         self.dream_sync = None
@@ -459,6 +482,7 @@ class ChibiAvatarApp:
         # Horus / Thoth mode
         self.horus_mode = False
         self.horus_auto_triggered = False
+        self._horus_check_timer = 0.0
 
         # Dream journal viewer (F2 overlay)
         self.dream_view_open = False
@@ -539,12 +563,23 @@ class ChibiAvatarApp:
         except Exception as e:
             print(f"[Memory] Extraction failed: {e}")
     def _check_horus_threshold(self):
-        """Auto-enter Horus mode during threshold hours (default 5-8am)."""
+        """Auto-enter Horus mode during threshold hours (default 5-8am).
+
+        Called at startup AND about once a minute from update() — the app runs
+        for weeks at a time, so a startup-only check would never fire. Once
+        the window passes, the auto flag re-arms for the next dawn (a manual
+        exit during the window stays exited until then).
+        """
         from datetime import datetime
         hour = datetime.now().hour
-        if (self.config.horus_threshold_start <= hour < self.config.horus_threshold_end
-                and not self.horus_auto_triggered):
-            self._enter_horus_mode(auto=True)
+        in_window = (self.config.horus_threshold_start <= hour
+                     < self.config.horus_threshold_end)
+        if in_window:
+            if (not self.horus_auto_triggered and not self.horus_mode
+                    and not self.is_generating):
+                self._enter_horus_mode(auto=True)
+        elif self.horus_auto_triggered:
+            self.horus_auto_triggered = False
 
     def _enter_horus_mode(self, auto=False):
         """Activate Thoth aspect."""
@@ -877,14 +912,53 @@ class ChibiAvatarApp:
         "market", "stock", "stocks", "share", "shares", "price", "crypto",
         "bitcoin", "btc", "ethereum", "eth", "solana", "nasdaq", "dow", "s&p",
         "sp500", "ticker", "portfolio",
-        "time", "clock", "date", "day", "today", "tomorrow", "what day",
+        "news", "headline", "headlines",
+        "calendar", "schedule", "event", "events", "appointment", "meeting",
+        "time", "clock", "date", "what day", "today", "tomorrow",
     )
 
     def _wants_live_data(self, text: str) -> bool:
-        """True if the message is plausibly about weather / markets / time, so
-        the live-data block is worth injecting. Keeps it out of every other turn."""
+        """True if the message is plausibly about weather / markets / news /
+        calendar / time, so the live-data block is worth injecting. Matches on
+        word boundaries so "sometimes"/"daytime" don't count as "time"."""
         t = text.lower()
-        return any(k in t for k in self._LIVE_DATA_KEYWORDS)
+        return any(re.search(r"\b" + re.escape(k) + r"\b", t)
+                   for k in self._LIVE_DATA_KEYWORDS)
+
+    def _notify_soul_of_feeds(self):
+        """Let the soul react to weather flips, fresh news, and big market moves."""
+        weather = self.feeds.get_weather()
+        cond = weather.condition.lower()
+        if cond and cond != "unknown":
+            if self._prev_weather_condition and cond != self._prev_weather_condition:
+                self.soul.on_weather_change(self._prev_weather_condition, cond, weather)
+            self._prev_weather_condition = cond
+        news = self.feeds.get_news()
+        if news.updated_at and news.updated_at != self._prev_news_updated:
+            self._prev_news_updated = news.updated_at
+            self.soul.on_news_update(news.headlines)
+        market = self.feeds.get_market()
+        for tk in market.tickers + market.crypto:
+            if abs(tk.change_pct) >= 7.0:
+                last = self._market_alerts.get(tk.symbol, 0.0)
+                if time.time() - last > 6 * 3600:  # one alert per symbol / 6h
+                    self._market_alerts[tk.symbol] = time.time()
+                    self.soul.on_market_move(tk.symbol, tk.change_pct)
+
+    def _deliver_impulse(self, impulse: str):
+        """Speak a soul impulse — Chibi pipes up on her own. Only called when
+        idle, not in Thoth mode, and outside the min-interval throttle."""
+        self._last_impulse_spoken = time.time()
+        print(f"[Soul] Impulse: {impulse!r}")
+        if self.state == AvatarState.SLEEPING:
+            self.set_state(AvatarState.IDLE)
+        self.conversation.append({"role": "assistant", "content": impulse})
+        self.bubble.set_text(impulse)
+        if self.voice_out:
+            self.voice_out.speak(impulse)
+        # Velle can answer without the wake word.
+        self._open_wake_window()
+        self.last_interaction = time.time()
 
     def send_message(self, text: str):
         """Send a message to the LLM in a background thread."""
@@ -901,25 +975,31 @@ class ChibiAvatarApp:
                     self.voice_out.speak_now("Okay, 5 more minutes.")
                 self.set_state(AvatarState.SLEEPING)
                 return
-            elif is_dismiss_word(text) or True:
-                # ANY voice input while ringing = dismiss
-                self.alarm.dismiss()
-                self.bubble.set_text("Good morning Velle! Have a great day! :3")
-                if self.voice_out:
-                    self.voice_out.speak_now("Good morning Velle! Have a great day!")
-                self.set_state(AvatarState.HAPPY)
-                self.last_interaction = time.time()
-                time.sleep(2)
-                self.set_state(AvatarState.IDLE)
-                return
+            # ANY other input while ringing = dismiss. HAPPY settles back to
+            # IDLE from update() — no blocking sleep on the main thread.
+            self.alarm.dismiss()
+            self.bubble.set_text("Good morning Velle! Have a great day! :3")
+            if self.voice_out:
+                self.voice_out.speak_now("Good morning Velle! Have a great day!")
+            self.set_state(AvatarState.HAPPY)
+            self.last_interaction = time.time()
+            return
 
         # ── Alarm commands ────────────────────────────────────────────────
         alarm_action = is_alarm_request(text)
         if alarm_action == "set":
             target = parse_alarm_time(text)
             if target:
-                alarm = self.alarm.add_alarm(target)
-                reply = f"Alarm set for {alarm.time_str}! I'll wake you up :3"
+                repeat_days = parse_alarm_repeat(text)
+                if repeat_days:
+                    target = align_to_repeat_days(target, repeat_days)
+                alarm = self.alarm.add_alarm(target, repeat_days=repeat_days)
+                if repeat_days:
+                    reply = (f"Repeating alarm set for {alarm.time_str} "
+                             f"({describe_repeat_days(repeat_days)})! "
+                             "I'll wake you up :3")
+                else:
+                    reply = f"Alarm set for {alarm.time_str}! I'll wake you up :3"
                 self.bubble.set_text(reply)
                 if self.voice_out:
                     self.voice_out.speak(reply)
@@ -972,6 +1052,22 @@ class ChibiAvatarApp:
             daemon=True,
         )
         thread.start()
+
+    # Sentence boundary for streaming TTS: terminal punctuation, optional
+    # closing quote/bracket, then whitespace.
+    _SENTENCE_END = re.compile(r"[.!?][\"')\]]*\s")
+
+    def _speak_streamed(self, text: str, upto: int) -> int:
+        """Queue newly completed sentences in text[upto:] for TTS.
+        Returns the new high-water mark into `text`."""
+        last_end = upto
+        for m in self._SENTENCE_END.finditer(text, upto):
+            last_end = m.end()
+        if last_end > upto:
+            segment = text[upto:last_end].strip()
+            if segment:
+                self.voice_out.speak(segment)
+        return last_end
 
     def _generate_response(self, vision_request=False):
         """Background thread: stream response from LLM."""
@@ -1037,6 +1133,13 @@ class ChibiAvatarApp:
             elif memory_context:
                 extra_system += "\n\n" + memory_context
 
+            # Soul — mood / relationship context (Chibi aspect only; the
+            # scribe stays out of Chibi's inner weather)
+            if self.soul and not self.horus_mode:
+                mood_ctx = self.soul.get_mood_context()
+                if mood_ctx:
+                    extra_system += "\n\n" + mood_ctx
+
             # Vision: if requested, capture and describe the scene
             if vision_request and self.vision:
                 scene_desc = self.vision.describe_scene()
@@ -1068,9 +1171,26 @@ class ChibiAvatarApp:
                     "Do NOT volunteer this information. Only use it to answer relevant questions.\n"
                     + live_context
                 )
+                # Calendar events (via the soul's ICS monitor, if configured)
+                if self.soul:
+                    cal_ctx = self.soul.calendar.get_context()
+                    if cal_ctx:
+                        extra_system += "\n" + cal_ctx
 
             num_predict = (self.config.horus_num_predict if self.horus_mode
                            else self.config.llm_num_predict)
+
+            # Pause the recorder for the whole generate+speak cycle. (The
+            # muted flag in update() also guards this; stopping the recorder
+            # is belt and braces.)
+            if self.voice_in and self.voice_in.is_listening:
+                self.voice_in.stop_listening()
+
+            # Streaming TTS: queue each sentence for speech the moment it
+            # completes instead of waiting for the full reply — perceived
+            # latency drops to time-to-first-sentence.
+            stream_tts = self.voice_out is not None
+            spoken_upto = 0
             full_response = ""
             for chunk in self.llm.stream_chat(self.conversation,
                                               extra_system=extra_system,
@@ -1079,12 +1199,26 @@ class ChibiAvatarApp:
                 self.response_text = full_response
                 if self.state == AvatarState.THINKING:
                     self.set_state(AvatarState.SPEAKING)
-                    self.bubble.set_text(full_response)
-                else:
-                    self.bubble.set_text(full_response)
+                self.bubble.set_text(full_response)
+                if stream_tts:
+                    spoken_upto = self._speak_streamed(full_response, spoken_upto)
+
+            # Speak the tail after the last sentence boundary. If num_predict
+            # clipped the reply mid-sentence, drop the dangling fragment from
+            # speech (the bubble still shows the full text).
+            if stream_tts:
+                tail = full_response[spoken_upto:].strip()
+                if tail:
+                    if re.search(r"[.!?][\"')\]]*$", tail) or spoken_upto == 0:
+                        self.voice_out.speak(tail)
+                    else:
+                        print(f"[TTS] Skipped clipped tail: {tail[:60]!r}")
 
             self.conversation.append({"role": "assistant", "content": full_response})
             self.is_generating = False
+            # Soul takes note of the exchange (mood shift, topics, milestones)
+            if self.soul:
+                self.soul.on_interaction(latest_user, full_response)
             # Keep the conversation window open for a beat after Chibi finishes
             # so Velle's immediate follow-up doesn't need the wake word again.
             self._open_wake_window()
@@ -1097,14 +1231,7 @@ class ChibiAvatarApp:
             if self._message_count % 6 == 0 and len(self.conversation) >= 4:
                 threading.Thread(target=self._extract_memories, daemon=True).start()
 
-            # Pause mic before speaking to prevent feedback loop
-            if self.voice_in and self.voice_in.is_listening:
-                self.voice_in.stop_listening()
-
-            # Speak the response
-            if self.voice_out and full_response:
-                self.voice_out.speak(full_response)
-
+            # (speech was already queued sentence-by-sentence during streaming)
             # Briefly show happy, then idle
             self.set_state(AvatarState.HAPPY)
             # Wait for TTS to finish with a hard timeout
@@ -1129,7 +1256,11 @@ class ChibiAvatarApp:
 
         except Exception as e:
             print(f"[LLM] Error: {e}")
-            self.response_text = f"[Error: {e}]"
+            if isinstance(e, ConnectionError):
+                self.response_text = ("I can't reach my brain right now... "
+                                      "is Ollama running on the PC?")
+            else:
+                self.response_text = f"[Error: {e}]"
             self.bubble.set_text(self.response_text)
             self.is_generating = False
             self.set_state(AvatarState.CONFUSED)
@@ -1139,6 +1270,12 @@ class ChibiAvatarApp:
 
     def update(self, dt):
         self.state_timer += dt
+
+        # Auto-Thoth threshold (~once a minute; also re-arms after the window)
+        self._horus_check_timer += dt
+        if self._horus_check_timer >= 60.0:
+            self._horus_check_timer = 0.0
+            self._check_horus_threshold()
 
         # ── Alarm ringing check ──────────────────────────────────────────
         if self.alarm.is_ringing and self.state != AvatarState.ALARM:
@@ -1239,6 +1376,36 @@ class ChibiAvatarApp:
             # Drain any transcriptions that came in while speaking (they're just echo)
             while self.voice_in.get_transcription() is not None:
                 pass
+
+        # HAPPY is transient — settle back to IDLE once speech is done
+        # (the alarm-dismiss path relies on this instead of a blocking sleep).
+        if (self.state == AvatarState.HAPPY and not self.is_generating
+                and not (self.voice_out and self.voice_out.busy)
+                and self.state_timer > 2.0):
+            self.set_state(AvatarState.IDLE)
+
+        # openWakeWord fired — open the conversation window, same as if the
+        # wake word had been transcribed.
+        if self.voice_in and self.voice_in.consume_wake_detection():
+            print("[Voice] Wake word detected (openWakeWord)")
+            self._open_wake_window()
+            if self.state == AvatarState.SLEEPING:
+                self.set_state(AvatarState.IDLE)
+
+        # ── Soul: feed observers + spontaneous impulses ──────────────────
+        if self.soul:
+            self._soul_feed_timer += dt
+            if self._soul_feed_timer >= 10.0:
+                self._soul_feed_timer = 0.0
+                self._notify_soul_of_feeds()
+            if (not self.is_generating and not self.horus_mode
+                    and self.state in (AvatarState.IDLE, AvatarState.SLEEPING)
+                    and not (self.voice_out and self.voice_out.busy)
+                    and time.time() - self._last_impulse_spoken
+                        > getattr(self.config, "impulse_min_interval", 300.0)):
+                impulse = self.soul.get_impulse()
+                if impulse:
+                    self._deliver_impulse(impulse)
 
         # Auto-sleep after inactivity
         if (self.state == AvatarState.IDLE and
@@ -1591,12 +1758,15 @@ class ChibiAvatarApp:
             pygame.display.flip()
 
         pygame.quit()
-        # Final memory extraction and save
-        if len(self.conversation) >= 2:
+        # Final memory extraction and save — skipped when the LLM is
+        # unreachable, so quitting can't block on a long network timeout.
+        if self.llm.connected and len(self.conversation) >= 2:
             print("[Memory] Extracting final memories...")
             self._extract_memories()
         self.memory.save()
         # Cleanup
+        if self.soul:
+            self.soul.cleanup()
         if self.dream_sync:
             self.dream_sync.stop()
         self.feeds.stop()

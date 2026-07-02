@@ -248,14 +248,33 @@ class Vision:
         t.start()
 
     def _awareness_loop(self):
-        """Periodically capture and analyze the scene for passive context."""
+        """Periodically capture and analyze the scene for passive context.
+
+        With vision_awareness_require_motion (default on), the vision LLM is
+        only queried when the frame actually changed since the last check —
+        an empty room no longer burns the PC's GPU every interval. A keepalive
+        pass still runs occasionally so the context can't go permanently stale.
+        """
+        require_motion = getattr(self.config,
+                                 "vision_awareness_require_motion", True)
+        keepalive = getattr(self.config, "vision_awareness_keepalive", 600)
+        last_llm_check = 0.0
         while self._running:
             try:
                 time.sleep(self.config.vision_awareness_interval)
                 if not self._running:
                     break
 
+                if require_motion:
+                    # Cheap local capture — updates self.motion_detected.
+                    if self.capture_frame() is None:
+                        continue
+                    stale = time.time() - last_llm_check > keepalive
+                    if not self.motion_detected and not stale:
+                        continue
+
                 context = self.analyze_for_context()
+                last_llm_check = time.time()
                 if context:
                     self.last_description = context
                     self._description_ready = True

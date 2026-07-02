@@ -27,15 +27,18 @@ Setup on Pi:
     sudo apt install sox libsox-fmt-all
 """
 
+import re
 import subprocess
 import threading
 import queue
 import time
 import os
+import sys
 import tempfile
 
-# Prefer aplay over pygame.mixer — more reliable on Pi
-USE_APLAY = True
+# Auto-detect platform for audio playback
+IS_WINDOWS = sys.platform == "win32"
+USE_APLAY = not IS_WINDOWS  # aplay on Linux, pygame.mixer on Windows
 
 
 class VoiceOutput:
@@ -107,6 +110,7 @@ class VoiceOutput:
         voice_dirs = [
             os.path.expanduser("~/.local/share/piper-voices"),
             os.path.expanduser("~/piper-voices"),
+            os.path.join(os.environ.get("USERPROFILE", ""), ".local", "share", "piper-voices"),
             "/usr/share/piper-voices",
         ]
 
@@ -124,7 +128,7 @@ class VoiceOutput:
                 print(f"[TTS] Voice model: {candidate}")
                 return
 
-        # Not found locally — the Python module can auto-download some voices.
+        # Not found — piper can auto-download some voices
         self._voice_path = self.voice
         print(f"[TTS] Voice '{self.voice}' not found locally, piper may download it")
 
@@ -139,15 +143,30 @@ class VoiceOutput:
             self._sox_available = False
 
     def speak(self, text: str):
-        """Queue text for speech. Non-blocking."""
-        if text and text.strip():
-            # Clean text for TTS — strip special chars that confuse piper
-            clean = text.strip()
-            clean = clean.replace('"', '').replace("'", "'")
-            clean = clean.replace(':3', '').replace('^_^', '')
-            clean = clean.replace('>w<', '').replace('~', '')
-            if clean:
-                self.speak_queue.put(clean)
+        """Queue text for speech. Non-blocking. Splits into sentences for reliability."""
+        if not text or not text.strip():
+            return
+        # Clean text for TTS — normalize the curly quotes/dashes LLMs love,
+        # then drop emoticons and anything outside printable ASCII (emoji,
+        # kaomoji) that Piper would read aloud or garble.
+        clean = text.strip()
+        for a, b in (("’", "'"), ("‘", "'"), ("“", ""),
+                     ("”", ""), ("—", ", "), ("–", ", "),
+                     ("…", "...")):
+            clean = clean.replace(a, b)
+        clean = clean.replace('"', '')
+        clean = clean.replace(':3', '').replace('^_^', '')
+        clean = clean.replace('>w<', '').replace('~', '')
+        clean = re.sub(r"[^\x20-\x7e\n]", "", clean).strip()
+        if not clean:
+            return
+
+        # Split into sentences so piper doesn't choke on long text
+        sentences = re.split(r'(?<=[.!?])\s+', clean)
+        for sentence in sentences:
+            s = sentence.strip()
+            if s:
+                self.speak_queue.put(s)
 
     def speak_now(self, text: str):
         """Clear queue and speak immediately."""
@@ -211,7 +230,7 @@ class VoiceOutput:
                  "--sentence_silence", "0.15"],
                 input=text.encode("utf-8"),
                 capture_output=True,
-                timeout=30,
+                timeout=120,
             )
 
             if proc.returncode != 0:
@@ -314,18 +333,28 @@ class VoiceOutput:
 
     def _speak_espeak(self, text: str):
         """Fallback — espeak with higher pitch to sound cuter."""
+        # On Windows, espeak might be in Program Files
+        espeak_cmd = "espeak"
+        if IS_WINDOWS:
+            pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+            win_path = os.path.join(pf, "eSpeak NG", "espeak-ng.exe")
+            if os.path.exists(win_path):
+                espeak_cmd = win_path
+
         try:
             subprocess.run(
-                ["espeak",
+                [espeak_cmd,
                  "-s", "160",    # speed (words per minute)
                  "-p", "80",     # pitch (0-99, higher = cuter)
                  "-v", "en+f3",  # female voice variant 3
                  text],
                 capture_output=True,
-                timeout=30,
+                timeout=120,
             )
         except FileNotFoundError:
             print("[TTS] espeak not found! No TTS available.")
+            if IS_WINDOWS:
+                print("[TTS] Install eSpeak NG from https://github.com/espeak-ng/espeak-ng/releases")
         except subprocess.TimeoutExpired:
             print("[TTS] espeak timed out")
         except Exception as e:
@@ -341,7 +370,7 @@ class VoiceOutput:
                 subprocess.run(
                     ["aplay", "-q", filepath],
                     capture_output=True,
-                    timeout=30,
+                    timeout=120,
                 )
                 return
             except FileNotFoundError:
@@ -359,7 +388,7 @@ class VoiceOutput:
                 pygame.mixer.music.load(filepath)
                 pygame.mixer.music.play()
                 start = time.time()
-                while pygame.mixer.music.get_busy() and (time.time() - start) < 30:
+                while pygame.mixer.music.get_busy() and (time.time() - start) < 120:
                     time.sleep(0.05)
                 pygame.mixer.music.stop()
         except Exception as e:

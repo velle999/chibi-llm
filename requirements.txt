@@ -1,0 +1,16 @@
+# Chibi-LLM dependencies
+# On the Pi / Arch, install with: pip install -r requirements.txt --break-system-packages
+# System packages also needed on Linux: alsa-utils (arecord/aplay), sox (pitch shift)
+
+pygame
+numpy
+requests
+faster-whisper          # speech-to-text
+piper-tts               # text-to-speech
+yfinance                # market ticker
+opencv-python-headless  # webcam vision
+
+# Optional
+psutil                  # soul: system monitoring (CPU/RAM/process awareness)
+Pillow                  # soul: screen awareness (screen_awareness_enabled)
+openwakeword            # experimental wake-word engine (oww_enabled)

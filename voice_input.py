@@ -109,7 +109,8 @@ def _build_capture_cmd():
 class VoiceInput:
     def __init__(self, model_size="tiny", device="cpu", compute_type="int8",
                  silence_threshold=SILENCE_THRESHOLD,
-                 min_speech_duration=MIN_SPEECH_DURATION):
+                 min_speech_duration=MIN_SPEECH_DURATION,
+                 oww_enabled=False, oww_model="", oww_threshold=0.5):
         """
         model_size: "tiny", "base", "small" — tiny recommended for Pi 4
         device: "cpu" for Pi
@@ -117,6 +118,10 @@ class VoiceInput:
         silence_threshold: mean-amplitude floor to start recording. Higher =
             less sensitive (keeps the TV / room noise from triggering).
         min_speech_duration: drop captures shorter than this (seconds).
+        oww_*: optional openWakeWord engine — a detection sets wake_detected
+            (polled by the app), which opens the conversation window exactly
+            like saying the transcription wake word. Degrades to disabled if
+            the package/model isn't available.
         """
         self.model_size = model_size
         self.device = device
@@ -125,6 +130,13 @@ class VoiceInput:
         self.min_speech_duration = min_speech_duration
         self.model = None
         self._proc = None
+
+        # Optional wake-word engine (experimental; config oww_enabled)
+        self._oww = None
+        self._oww_threshold = oww_threshold
+        self.wake_detected = False
+        if oww_enabled:
+            self._init_oww(oww_model)
 
         self.is_listening = False
         self.is_recording = False
@@ -163,6 +175,37 @@ class VoiceInput:
     @property
     def ready(self) -> bool:
         return self._ready
+
+    def _init_oww(self, model_path: str):
+        """Load openWakeWord if installed; any failure just disables it."""
+        try:
+            from openwakeword.model import Model
+            kwargs = {"wakeword_models": [model_path]} if model_path else {}
+            self._oww = Model(**kwargs)
+            print(f"[Voice] openWakeWord active "
+                  f"({model_path or 'bundled models'})")
+        except Exception as e:
+            print(f"[Voice] openWakeWord unavailable ({e}); "
+                  f"using the transcription wake word only.")
+            self._oww = None
+
+    def consume_wake_detection(self) -> bool:
+        """True once per wake-word detection (cleared on read)."""
+        if self.wake_detected:
+            self.wake_detected = False
+            return True
+        return False
+
+    def _feed_oww(self, chunk: np.ndarray):
+        """Run the wake-word model on a PCM chunk; sets wake_detected on a hit."""
+        try:
+            scores = self._oww.predict(chunk)
+            if scores and max(scores.values()) >= self._oww_threshold:
+                self.wake_detected = True
+                self._oww.reset()
+        except Exception as e:
+            print(f"[Voice] openWakeWord error ({e}); disabling engine.")
+            self._oww = None
 
     def _open_stream(self):
         """Start the recorder subprocess streaming raw s16le PCM to stdout."""
@@ -302,6 +345,10 @@ class VoiceInput:
                 if audio_array is None:
                     # recorder died; surface as error so the loop can restart it
                     raise RuntimeError("audio recorder stopped unexpectedly")
+                # Wake-word engine sees every (unmuted) chunk, whether or not
+                # VAD is currently recording.
+                if self._oww is not None:
+                    self._feed_oww(audio_array)
                 amplitude = np.abs(audio_array.astype(np.int32)).mean()
 
                 if amplitude > self.silence_threshold:

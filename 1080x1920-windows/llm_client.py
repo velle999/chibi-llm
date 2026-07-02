@@ -4,6 +4,8 @@ Supports streaming responses for real-time avatar reactions.
 """
 
 import json
+import threading
+import time
 import urllib.request
 import urllib.error
 import http.client
@@ -15,6 +17,16 @@ class LLMClient:
         self.config = config
         self.connected = False
         self._check_connection()
+
+    def start_health_check(self, interval: float = 30.0):
+        """Ping the server periodically (daemon thread) so `connected` stays
+        honest between messages — otherwise the status dot shows a green light
+        for hours after the server goes down."""
+        def _loop():
+            while True:
+                time.sleep(interval)
+                self._check_connection()
+        threading.Thread(target=_loop, daemon=True).start()
 
     @property
     def base_url(self) -> str:

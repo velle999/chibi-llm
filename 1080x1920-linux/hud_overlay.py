@@ -195,8 +195,10 @@ class MarketTicker_Overlay:
 
         w = surface.get_width()
 
-        # Rebuild surface if data changed
-        data_hash = f"{len(market.tickers)}_{len(market.crypto)}_{market.fear_greed}"
+        # Rebuild surface if data changed. updated_at must be in the key:
+        # counts alone miss price refreshes, leaving stale prices scrolling.
+        data_hash = (f"{market.updated_at}_{len(market.tickers)}_"
+                     f"{len(market.crypto)}_{market.fear_greed}")
         if data_hash != self._cached_data_hash or self._cached_surface is None:
             self._cached_surface = self._build_ticker_surface(market)
             self._cached_data_hash = data_hash

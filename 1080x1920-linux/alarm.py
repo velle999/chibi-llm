@@ -93,8 +93,10 @@ def parse_alarm_time(text: str) -> datetime | None:
     lower = text.lower().strip()
     now = datetime.now()
 
-    # "in X minutes/hours"
-    m = re.search(r'in\s+(\d+)\s*(min|minute|hour|hr)', lower)
+    # "in X minutes/hours" / "for X minutes/hours" (timer phrasing —
+    # without the "for" variant, "set a timer for 20 minutes" fell through
+    # to the bare-number branch and became an 8 PM alarm)
+    m = re.search(r'\b(?:in|for)\s+(\d+)\s*(min|minute|hour|hr)', lower)
     if m:
         amount = int(m.group(1))
         unit = m.group(2)
@@ -172,6 +174,58 @@ def parse_alarm_time(text: str) -> datetime | None:
     return target
 
 
+_DAY_NAMES = {
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
+}
+
+
+def parse_alarm_repeat(text: str) -> list | None:
+    """
+    Detect a repeat spec in natural language.
+    Returns a repeat_days list (0=Mon .. 6=Sun) or None for one-shot alarms.
+    Handles: "every day/morning/night", "daily", "every weekday"/"weekdays",
+    "weekends", "every monday" (etc).
+    """
+    lower = text.lower()
+    if re.search(r"\bevery\s+(day|morning|night|evening)\b", lower) or "daily" in lower:
+        return [0, 1, 2, 3, 4, 5, 6]
+    if re.search(r"\b(every\s+weekday|weekdays)\b", lower):
+        return [0, 1, 2, 3, 4]
+    if re.search(r"\b(every\s+weekend|weekends)\b", lower):
+        return [5, 6]
+    m = re.search(r"\bevery\s+(monday|tuesday|wednesday|thursday|friday"
+                  r"|saturday|sunday)s?\b", lower)
+    if m:
+        return [_DAY_NAMES[m.group(1)]]
+    return None
+
+
+def align_to_repeat_days(target: datetime, repeat_days: list) -> datetime:
+    """Push the first firing forward to the next day in repeat_days
+    (e.g. 'wake me at 7 every weekday' said on Saturday → Monday 7am)."""
+    if not repeat_days or target.weekday() in repeat_days:
+        return target
+    for i in range(1, 8):
+        cand = target + timedelta(days=i)
+        if cand.weekday() in repeat_days:
+            return cand
+    return target
+
+
+def describe_repeat_days(days: list) -> str:
+    """Human-readable repeat spec for confirmations."""
+    d = sorted(set(days))
+    if d == [0, 1, 2, 3, 4, 5, 6]:
+        return "every day"
+    if d == [0, 1, 2, 3, 4]:
+        return "weekdays"
+    if d == [5, 6]:
+        return "weekends"
+    names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    return "every " + ", ".join(names[i] for i in d)
+
+
 # ─── Alarm Data ──────────────────────────────────────────────────────────────
 
 @dataclass
@@ -246,6 +300,11 @@ class AlarmManager:
             now = datetime.now()
             self.alarms = [a for a in self.alarms
                            if a.repeating or a.datetime > now]
+            # Fast-forward repeating alarms whose time passed while we were
+            # off — otherwise they sit in the past and never fire again.
+            for a in self.alarms:
+                if a.repeating and a.datetime <= now:
+                    a.time = self._next_occurrence(a, after=now).isoformat()
             print(f"[Alarm] Loaded {len(self.alarms)} alarms")
         except Exception as e:
             print(f"[Alarm] Load error: {e}")
@@ -260,16 +319,35 @@ class AlarmManager:
         except Exception as e:
             print(f"[Alarm] Save error: {e}")
 
-    def add_alarm(self, target_time: datetime, label: str = "") -> Alarm:
+    def add_alarm(self, target_time: datetime, label: str = "",
+                  repeat_days: list | None = None) -> Alarm:
         alarm = Alarm(
             time=target_time.isoformat(),
             label=label or f"Alarm at {target_time.strftime('%I:%M %p')}",
+            repeating=bool(repeat_days),
+            repeat_days=list(repeat_days) if repeat_days else [],
         )
         with self._lock:
             self.alarms.append(alarm)
         self._save()
-        print(f"[Alarm] Set for {alarm.time_str}")
+        rep = f" (repeats: {describe_repeat_days(alarm.repeat_days)})" if alarm.repeating else ""
+        print(f"[Alarm] Set for {alarm.time_str}{rep}")
         return alarm
+
+    @staticmethod
+    def _next_occurrence(alarm: Alarm, after: datetime | None = None) -> datetime:
+        """Next datetime strictly after `after` (default now) that matches the
+        alarm's time-of-day and repeat_days."""
+        after = after or datetime.now()
+        base = alarm.datetime
+        days = alarm.repeat_days or list(range(7))
+        cand = after.replace(hour=base.hour, minute=base.minute,
+                             second=0, microsecond=0)
+        for i in range(8):
+            c = cand + timedelta(days=i)
+            if c > after and c.weekday() in days:
+                return c
+        return cand + timedelta(days=1)
 
     def cancel_next(self) -> Alarm | None:
         with self._lock:
@@ -330,10 +408,15 @@ class AlarmManager:
                     self._snooze_flag = False
                     self._wake_msg_index = 0
 
-                    # Remove this alarm (non-repeating)
+                    # One-shot alarms are removed; repeating ones are
+                    # rescheduled to their next matching day.
                     with self._lock:
                         if triggered in self.alarms:
-                            self.alarms.remove(triggered)
+                            if triggered.repeating and triggered.repeat_days:
+                                triggered.time = self._next_occurrence(
+                                    triggered).isoformat()
+                            else:
+                                self.alarms.remove(triggered)
                     self._save()
 
                 # Auto-dismiss after 10 minutes of ringing

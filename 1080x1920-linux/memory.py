@@ -76,6 +76,16 @@ class PersistentMemory:
             self.dream_entries = data.get("dream_entries", [])
             self.stats = data.get("stats", self.stats)
             self.user_name = data.get("user_name", "")
+            # Age out stale summaries (ISO timestamps compare lexicographically;
+            # entries without a timestamp are kept).
+            cutoff = (datetime.now()
+                      - timedelta(days=MAX_SUMMARY_AGE_DAYS)).isoformat()
+            before = len(self.summaries)
+            self.summaries = [s for s in self.summaries
+                              if s.get("created_at", cutoff) >= cutoff]
+            if len(self.summaries) < before:
+                print(f"[Memory] Aged out {before - len(self.summaries)} "
+                      f"summaries older than {MAX_SUMMARY_AGE_DAYS} days")
             print(f"[Memory] Loaded: {len(self.facts)} facts, "
                   f"{len(self.summaries)} summaries, {len(self.notes)} notes, "
                   f"{len(self.dream_entries)} dream entries")
@@ -228,12 +238,15 @@ class PersistentMemory:
     # ─── Stats Tracking ──────────────────────────────────────────────────
 
     def record_interaction(self):
-        """Record that an interaction happened."""
+        """Record that an interaction happened (and persist — stats-only
+        sessions used to lose their counts on exit)."""
         now = datetime.now().isoformat()
-        self.stats["total_messages"] = self.stats.get("total_messages", 0) + 1
-        if not self.stats.get("first_interaction"):
-            self.stats["first_interaction"] = now
-        self.stats["last_interaction"] = now
+        with self._lock:
+            self.stats["total_messages"] = self.stats.get("total_messages", 0) + 1
+            if not self.stats.get("first_interaction"):
+                self.stats["first_interaction"] = now
+            self.stats["last_interaction"] = now
+        self.save()
 
     def start_conversation(self):
         """Record start of a new conversation session."""
@@ -247,64 +260,66 @@ class PersistentMemory:
         Generate a memory context string to inject into the LLM system prompt.
         Prioritizes most important and recent memories.
         """
-        parts = []
+        with self._lock:
+            parts = []
 
-        # User name
-        if self.user_name:
-            parts.append(f"The user's name is {self.user_name}.")
+            # User name
+            if self.user_name:
+                parts.append(f"The user's name is {self.user_name}.")
 
-        # Stats
-        total = self.stats.get("total_messages", 0)
-        convos = self.stats.get("total_conversations", 0)
-        first = self.stats.get("first_interaction")
-        if total > 0:
-            stats_line = f"You've had {convos} conversations with {total} total messages."
-            if first:
-                try:
-                    first_dt = datetime.fromisoformat(first)
-                    days = (datetime.now() - first_dt).days
-                    if days > 0:
-                        stats_line += f" You've known this user for {days} days."
-                except Exception:
-                    pass
-            parts.append(stats_line)
+            # Stats
+            total = self.stats.get("total_messages", 0)
+            convos = self.stats.get("total_conversations", 0)
+            first = self.stats.get("first_interaction")
+            if total > 0:
+                stats_line = f"You've had {convos} conversations with {total} total messages."
+                if first:
+                    try:
+                        first_dt = datetime.fromisoformat(first)
+                        days = (datetime.now() - first_dt).days
+                        if days > 0:
+                            stats_line += f" You've known this user for {days} days."
+                    except Exception:
+                        pass
+                parts.append(stats_line)
 
-        # Important facts (sorted by importance, top 6). Kept small on purpose:
-        # dumping the whole memory store every turn makes Chibi recite "ancient
-        # history" unprompted, especially with a small local LLM.
-        if self.facts:
-            sorted_facts = sorted(self.facts,
-                                  key=lambda x: x.get("importance", 5),
-                                  reverse=True)[:6]
-            fact_lines = [f"- {f['text']}" for f in sorted_facts]
-            parts.append("What you know about the user:\n" + "\n".join(fact_lines))
+            # Important facts (sorted by importance, top 6). Kept small on purpose:
+            # dumping the whole memory store every turn makes Chibi recite "ancient
+            # history" unprompted, especially with a small local LLM.
+            if self.facts:
+                sorted_facts = sorted(self.facts,
+                                      key=lambda x: x.get("importance", 5),
+                                      reverse=True)[:6]
+                fact_lines = [f"- {f['text']}" for f in sorted_facts]
+                parts.append("What you know about the user:\n" + "\n".join(fact_lines))
 
-        # Explicit notes (last 4)
-        if self.notes:
-            recent_notes = self.notes[-4:]
-            note_lines = [f"- {n['text']}" for n in recent_notes]
-            parts.append("Things the user asked you to remember:\n" + "\n".join(note_lines))
+            # Explicit notes (last 4)
+            if self.notes:
+                recent_notes = self.notes[-4:]
+                note_lines = [f"- {n['text']}" for n in recent_notes]
+                parts.append("Things the user asked you to remember:\n" + "\n".join(note_lines))
 
-        # Recent summaries (last 2)
-        if self.summaries:
-            recent = self.summaries[-2:]
-            sum_lines = [f"- [{s.get('created_at', '?')[:10]}] {s['text']}"
-                         for s in recent]
-            parts.append("Recent conversation summaries:\n" + "\n".join(sum_lines))
+            # Recent summaries (last 2)
+            if self.summaries:
+                recent = self.summaries[-2:]
+                sum_lines = [f"- [{s.get('created_at', '?')[:10]}] {s['text']}"
+                             for s in recent]
+                parts.append("Recent conversation summaries:\n" + "\n".join(sum_lines))
 
-        if not parts:
-            return ""
+            if not parts:
+                return ""
 
-        return "[LONG-TERM MEMORY]\n" + "\n\n".join(parts)
+            return "[LONG-TERM MEMORY]\n" + "\n\n".join(parts)
 
     def get_dream_context(self, last_n: int = 5) -> str:
         """
         Return recent dream/vision entries as context for Thoth mode.
         Keeps Thoth aware of the emerging personal symbol pattern across sessions.
         """
-        if not self.dream_entries:
-            return ""
-        recent = self.dream_entries[-last_n:]
+        with self._lock:
+            if not self.dream_entries:
+                return ""
+            recent = list(self.dream_entries[-last_n:])
         lines = []
         for e in recent:
             date = e.get("created_at", "?")[:10]

@@ -95,12 +95,22 @@ class Config:
     wake_word: str = "computer"
     wake_window_seconds: float = 22.0        # Window stays open this long after
                                              # each real exchange for follow-ups.
-    # Voice activity detection. Raised from the old 500 so the TV across the
-    # room no longer clears the floor — tune per room (higher = less sensitive).
-    # min_speech drops brief thumps; mic_echo_cooldown drops Chibi's own TTS tail.
+    # Voice activity detection — mean-amplitude floor to start recording.
+    # Tune per room: higher = less sensitive (if the TV across the room keeps
+    # triggering the mic, try 800-1200). min_speech drops brief thumps;
+    # mic_echo_cooldown drops Chibi's own TTS tail.
     vad_silence_threshold: int = 500
     vad_min_speech_duration: float = 0.5
     mic_echo_cooldown: float = 1.0
+
+    # Experimental: openWakeWord local wake-word engine. When enabled (needs
+    # `pip install openwakeword`), a detection opens the conversation window
+    # exactly like saying the wake word — so a custom-trained "chibi" model
+    # gives the real name back without Whisper in the loop. Falls back
+    # silently to the transcription wake word when unavailable.
+    oww_enabled: bool = False
+    oww_model: str = ""          # path to a .tflite/.onnx wake model ("" = bundled demo models)
+    oww_threshold: float = 0.5
 
     # ── Weather ──────────────────────────────────────────────────────────
     weather_enabled: bool = True
@@ -137,10 +147,33 @@ class Config:
     vision_awareness_interval: int = 60    # Passive scene check every N seconds
     vision_motion_threshold: float = 0.05  # % of pixels changed for motion
     vision_pip: bool = True            # Show camera thumbnail on screen
+    # Passive awareness only queries the vision LLM when the scene actually
+    # changed (saves the PC's GPU when the room is empty); a keepalive pass
+    # still refreshes the context at least this often.
+    vision_awareness_require_motion: bool = True
+    vision_awareness_keepalive: int = 600
 
     # ── Alarm ────────────────────────────────────────────────────────────
     alarm_speak_interval: float = 8.0  # Seconds between wake-up messages
     alarm_snooze_minutes: int = 5      # Default snooze duration
+
+    # ── Soul (inner life) ────────────────────────────────────────────────
+    # Persistent mood + relationship tracking, emotional mirroring, and
+    # spontaneous impulses (morning greeting, milestones, topic callbacks,
+    # weather/news/market reactions). State lives in ~/.chibi-soul.json.
+    soul_enabled: bool = True
+    # Minimum seconds between spoken impulses. Impulses only fire while idle
+    # — never during an alarm, Thoth mode, generation, or speech.
+    impulse_min_interval: float = 300.0
+    # Screen awareness: periodic screenshot → vision model. OFF by default,
+    # and pointless on the Pi kiosk (it would only see Chibi herself) —
+    # meant for a desktop machine. Needs scrot/maim (X11) plus Pillow.
+    screen_awareness_enabled: bool = False
+    screen_awareness_interval: int = 120
+    # Google Calendar (or any ICS URL) for event awareness + "15 minutes
+    # until X" reminders. Empty = disabled. Can also be set via the
+    # CHIBI_CALENDAR_ICS_URL env var or config.local.py.
+    calendar_ics_url: str = ""
 
     # ── Horus / Thoth Mode ───────────────────────────────────────────────
     horus_threshold_start: int = 5     # Hour (24h) when Thoth auto-activates
@@ -261,6 +294,7 @@ class Config:
             ("CHIBI_WEATHER_API_KEY", "weather_api_key"),
             ("CHIBI_LLM_HOST", "llm_host"),
             ("CHIBI_DREAM_SYNC_PEER_HOST", "dream_sync_peer_host"),
+            ("CHIBI_CALENDAR_ICS_URL", "calendar_ics_url"),
         ):
             val = os.environ.get(env)
             if val:

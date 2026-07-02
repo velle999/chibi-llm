@@ -27,6 +27,7 @@ Setup on Pi:
     sudo apt install sox libsox-fmt-all
 """
 
+import re
 import subprocess
 import threading
 import queue
@@ -145,16 +146,22 @@ class VoiceOutput:
         """Queue text for speech. Non-blocking. Splits into sentences for reliability."""
         if not text or not text.strip():
             return
-        # Clean text for TTS
+        # Clean text for TTS — normalize the curly quotes/dashes LLMs love,
+        # then drop emoticons and anything outside printable ASCII (emoji,
+        # kaomoji) that Piper would read aloud or garble.
         clean = text.strip()
-        clean = clean.replace('"', '').replace("'", "'")
+        for a, b in (("’", "'"), ("‘", "'"), ("“", ""),
+                     ("”", ""), ("—", ", "), ("–", ", "),
+                     ("…", "...")):
+            clean = clean.replace(a, b)
+        clean = clean.replace('"', '')
         clean = clean.replace(':3', '').replace('^_^', '')
         clean = clean.replace('>w<', '').replace('~', '')
+        clean = re.sub(r"[^\x20-\x7e\n]", "", clean).strip()
         if not clean:
             return
 
         # Split into sentences so piper doesn't choke on long text
-        import re
         sentences = re.split(r'(?<=[.!?])\s+', clean)
         for sentence in sentences:
             s = sentence.strip()

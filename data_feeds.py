@@ -117,6 +117,29 @@ class MarketData:
         return " ".join(parts) if parts else "Market data unavailable."
 
 
+@dataclass
+class NewsHeadline:
+    title: str = ""
+    source: str = ""
+    published: str = ""
+    url: str = ""
+
+
+@dataclass
+class NewsData:
+    headlines: list = field(default_factory=list)
+    updated_at: str = ""
+
+    def summary(self, max_items: int = 8) -> str:
+        if not self.headlines:
+            return "News data unavailable."
+        items = []
+        for h in self.headlines[:max_items]:
+            src = f" ({h.source})" if h.source else ""
+            items.append(f"• {h.title}{src}")
+        return "Top headlines:\n" + "\n".join(items)
+
+
 # ─── Fetchers ────────────────────────────────────────────────────────────────
 
 def fetch_weather_owm(api_key: str, city: str, units: str = "imperial") -> WeatherData:
@@ -167,7 +190,7 @@ def fetch_weather_wttr(city: str) -> WeatherData:
         url = f"https://wttr.in/{urllib.request.quote(city)}?format=j1"
         req = urllib.request.Request(url, method="GET")
         req.add_header("User-Agent", "chibi-avatar/1.0")
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=8) as resp:
             j = json.loads(resp.read().decode())
 
         current = j.get("current_condition", [{}])[0]
@@ -189,6 +212,128 @@ def fetch_weather_wttr(city: str) -> WeatherData:
         print(f"[Weather] wttr.in error: {e}")
 
     return data
+
+
+# City → lat/lon lookup for Open-Meteo (add your city here)
+_CITY_COORDS = {
+    "st. louis": (38.63, -90.20),
+    "st louis": (38.63, -90.20),
+    "new york": (40.71, -74.01),
+    "los angeles": (34.05, -118.24),
+    "chicago": (41.88, -87.63),
+    "houston": (29.76, -95.37),
+    "phoenix": (33.45, -112.07),
+    "san francisco": (37.77, -122.42),
+    "seattle": (47.61, -122.33),
+    "denver": (39.74, -104.99),
+    "miami": (25.76, -80.19),
+    "dallas": (32.78, -96.80),
+    "london": (51.51, -0.13),
+    "tokyo": (35.68, 139.69),
+}
+
+
+def fetch_weather_openmeteo(city: str) -> WeatherData:
+    """Fetch weather from Open-Meteo (free, no key, very reliable)."""
+    data = WeatherData()
+    try:
+        coords = _CITY_COORDS.get(city.lower())
+        if not coords:
+            # Try geocoding
+            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={urllib.request.quote(city)}&count=1"
+            req = urllib.request.Request(geo_url)
+            req.add_header("User-Agent", "chibi-llm/1.0")
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                geo = json.loads(resp.read().decode())
+            results = geo.get("results", [])
+            if not results:
+                print(f"[Weather] Open-Meteo: city '{city}' not found")
+                return data
+            coords = (results[0]["latitude"], results[0]["longitude"])
+            # Cache it
+            _CITY_COORDS[city.lower()] = coords
+
+        lat, lon = coords
+        url = (
+            f"https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lat}&longitude={lon}"
+            f"&current=temperature_2m,relative_humidity_2m,apparent_temperature,"
+            f"weather_code,wind_speed_10m"
+            f"&temperature_unit=fahrenheit&wind_speed_unit=mph"
+            f"&daily=sunrise,sunset&timezone=auto&forecast_days=1"
+        )
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "chibi-llm/1.0")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            j = json.loads(resp.read().decode())
+
+        current = j.get("current", {})
+        data.city = city
+        data.temperature = float(current.get("temperature_2m", 0))
+        data.feels_like = float(current.get("apparent_temperature", 0))
+        data.humidity = int(current.get("relative_humidity_2m", 0))
+        data.wind_speed = float(current.get("wind_speed_10m", 0))
+
+        wmo_code = current.get("weather_code", 0)
+        data.condition = _map_wmo_condition(wmo_code)
+        data.description = _wmo_description(wmo_code)
+        data.updated_at = datetime.now().strftime("%H:%M")
+
+        daily = j.get("daily", {})
+        if daily.get("sunrise"):
+            try:
+                sr = datetime.fromisoformat(daily["sunrise"][0])
+                data.sunrise = sr.strftime("%I:%M %p")
+            except Exception:
+                pass
+        if daily.get("sunset"):
+            try:
+                ss = datetime.fromisoformat(daily["sunset"][0])
+                data.sunset = ss.strftime("%I:%M %p")
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"[Weather] Open-Meteo error: {e}")
+
+    return data
+
+
+def _map_wmo_condition(code: int) -> str:
+    """Map WMO weather codes to simple conditions."""
+    if code == 0:
+        return "clear"
+    elif code in (1, 2, 3):
+        return "clouds"
+    elif code in (45, 48):
+        return "fog"
+    elif code in (51, 53, 55, 56, 57):
+        return "drizzle"
+    elif code in (61, 63, 65, 66, 67, 80, 81, 82):
+        return "rain"
+    elif code in (71, 73, 75, 77, 85, 86):
+        return "snow"
+    elif code in (95, 96, 99):
+        return "storm"
+    return "unknown"
+
+
+def _wmo_description(code: int) -> str:
+    """Human-readable WMO weather description."""
+    descriptions = {
+        0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast",
+        45: "foggy", 48: "depositing rime fog",
+        51: "light drizzle", 53: "moderate drizzle", 55: "dense drizzle",
+        56: "light freezing drizzle", 57: "dense freezing drizzle",
+        61: "slight rain", 63: "moderate rain", 65: "heavy rain",
+        66: "light freezing rain", 67: "heavy freezing rain",
+        71: "slight snowfall", 73: "moderate snowfall", 75: "heavy snowfall",
+        77: "snow grains", 80: "slight rain showers", 81: "moderate rain showers",
+        82: "violent rain showers", 85: "slight snow showers", 86: "heavy snow showers",
+        95: "thunderstorm", 96: "thunderstorm with slight hail",
+        99: "thunderstorm with heavy hail",
+    }
+    return descriptions.get(code, "unknown")
 
 
 def _map_wttr_condition(code: str) -> str:
@@ -319,11 +464,62 @@ def fetch_fear_greed() -> tuple[int, str]:
         return -1, ""
 
 
+def fetch_news_google(topic: str = "", max_items: int = 10) -> list[NewsHeadline]:
+    """Fetch top headlines from Google News RSS (no API key needed)."""
+    import xml.etree.ElementTree as ET
+    headlines = []
+    try:
+        if topic:
+            url = f"https://news.google.com/rss/search?q={urllib.request.quote(topic)}&hl=en-US&gl=US&ceid=US:en"
+        else:
+            url = "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"
+
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("User-Agent", "chibi-llm/1.0")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            xml_data = resp.read().decode()
+
+        root = ET.fromstring(xml_data)
+        for item in root.findall(".//item")[:max_items]:
+            title = item.findtext("title", "")
+            source = item.findtext("source", "")
+            pub_date = item.findtext("pubDate", "")
+            link = item.findtext("link", "")
+
+            # Clean up title — Google News appends " - Source" to titles
+            if " - " in title and source:
+                title = title.rsplit(" - ", 1)[0].strip()
+
+            # Parse date to something short
+            short_date = ""
+            if pub_date:
+                try:
+                    from email.utils import parsedate_to_datetime
+                    dt = parsedate_to_datetime(pub_date)
+                    short_date = dt.strftime("%I:%M %p")
+                except Exception:
+                    short_date = pub_date[:16]
+
+            headlines.append(NewsHeadline(
+                title=title,
+                source=source,
+                published=short_date,
+                url=link,
+            ))
+
+    except Exception as e:
+        print(f"[News] Google News RSS error: {e}")
+
+    return headlines
+
+
 def get_market_status() -> str:
-    """Estimate US market status based on current time."""
-    now = datetime.now()
-    # Simple EST approximation (not accounting for DST perfectly)
-    # You can improve this with pytz if needed
+    """US market status based on Eastern Time (zoneinfo handles DST)."""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        now = datetime.now()  # fallback: local time approximation
     hour = now.hour
     weekday = now.weekday()  # 0=Mon, 6=Sun
 
@@ -351,6 +547,7 @@ class DataFeedManager:
         self.config = config
         self.weather = WeatherData()
         self.market = MarketData()
+        self.news = NewsData()
         self._running = True
         self._lock = threading.Lock()
 
@@ -363,21 +560,37 @@ class DataFeedManager:
             t = threading.Thread(target=self._market_loop, daemon=True)
             t.start()
 
+        if getattr(self.config, 'news_enabled', True):
+            t = threading.Thread(target=self._news_loop, daemon=True)
+            t.start()
+
     def _weather_loop(self):
-        """Fetch weather periodically."""
+        """Fetch weather periodically with fallback chain."""
         while self._running:
+            data = None
             try:
                 if self.config.weather_api_key:
                     data = fetch_weather_owm(
                         self.config.weather_api_key,
                         self.config.weather_city,
                     )
-                else:
+
+                # Try wttr.in first (if no OWM key or OWM failed)
+                if not data or not data.description:
                     data = fetch_weather_wttr(self.config.weather_city)
 
-                with self._lock:
-                    self.weather = data
-                print(f"[Weather] Updated: {data.description}, {data.temperature:.0f}°F")
+                # Fallback to Open-Meteo if wttr.in failed
+                if not data or not data.description:
+                    print("[Weather] wttr.in failed, trying Open-Meteo...")
+                    data = fetch_weather_openmeteo(self.config.weather_city)
+
+                # Only update if we got valid data
+                if data and data.description:
+                    with self._lock:
+                        self.weather = data
+                    print(f"[Weather] Updated: {data.description}, {data.temperature:.0f}°F")
+                else:
+                    print("[Weather] All sources failed, keeping previous data")
 
             except Exception as e:
                 print(f"[Weather] Feed error: {e}")
@@ -417,6 +630,23 @@ class DataFeedManager:
 
             time.sleep(self.config.market_interval)
 
+    def _news_loop(self):
+        """Fetch news headlines periodically."""
+        interval = getattr(self.config, 'news_interval', 600)
+        topic = getattr(self.config, 'news_topic', '')
+        while self._running:
+            try:
+                headlines = fetch_news_google(topic=topic, max_items=10)
+                with self._lock:
+                    self.news = NewsData(
+                        headlines=headlines,
+                        updated_at=datetime.now().strftime("%H:%M"),
+                    )
+                print(f"[News] Updated: {len(headlines)} headlines")
+            except Exception as e:
+                print(f"[News] Feed error: {e}")
+            time.sleep(interval)
+
     def get_context(self) -> str:
         """
         Returns a context string to inject into the LLM system prompt.
@@ -430,6 +660,9 @@ class DataFeedManager:
 
             if self.config.market_enabled and (self.market.tickers or self.market.crypto):
                 parts.append(f"[MARKET DATA] {self.market.summary()}")
+
+            if getattr(self.config, 'news_enabled', True) and self.news.headlines:
+                parts.append(f"[NEWS HEADLINES] {self.news.summary()}")
 
             now = datetime.now()
             parts.append(
@@ -445,6 +678,10 @@ class DataFeedManager:
     def get_market(self) -> MarketData:
         with self._lock:
             return self.market
+
+    def get_news(self) -> NewsData:
+        with self._lock:
+            return self.news
 
     def stop(self):
         self._running = False

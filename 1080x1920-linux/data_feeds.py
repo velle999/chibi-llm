@@ -514,10 +514,12 @@ def fetch_news_google(topic: str = "", max_items: int = 10) -> list[NewsHeadline
 
 
 def get_market_status() -> str:
-    """Estimate US market status based on current time."""
-    now = datetime.now()
-    # Simple EST approximation (not accounting for DST perfectly)
-    # You can improve this with pytz if needed
+    """US market status based on Eastern Time (zoneinfo handles DST)."""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("America/New_York"))
+    except Exception:
+        now = datetime.now()  # fallback: local time approximation
     hour = now.hour
     weekday = now.weekday()  # 0=Mon, 6=Sun
 
