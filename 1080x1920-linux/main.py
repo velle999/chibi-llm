@@ -587,11 +587,11 @@ class ChibiAvatarApp:
         if auto:
             self.horus_auto_triggered = True
         print("[Horus] Thoth mode activated.")
-        opening = (
-            "The threshold hour. The veil is thin. What did you bring back?"
-            if auto else
-            "The journal is open. Speak what needs to be recorded."
-        )
+        if auto:
+            # Threshold entry happens unprompted (often pre-dawn in a
+            # bedroom) — switch silently; the aspect overlay shows the state.
+            return
+        opening = "The journal is open. Speak what needs to be recorded."
         self.conversation.append({"role": "assistant", "content": opening})
         self.bubble.set_text(opening)
         if self.voice_out:
