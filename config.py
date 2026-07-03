@@ -56,6 +56,7 @@ class Config:
     neon_accent: tuple = (180, 60, 255)     # Purple
     neon_warning: tuple = (255, 200, 50)    # Amber
     scanlines: bool = True
+    clock_font_size: int = 40
 
     # ── Chat Bubble ──────────────────────────────────────────────────────
     bubble_font_size: int = 16
@@ -88,10 +89,9 @@ class Config:
     # TV / ambient chatter from triggering a response. (Typed input and Horus
     # mode always pass and refresh the window.)
     #
-    # NOTE: the trigger is "computer", NOT "chibi" — Whisper-tiny can't reliably
-    # transcribe the name "Chibi" (it comes out be/TV/CB/baby every time), so a
-    # name-based wake word silently failed. "computer" transcribes essentially
-    # every time. She's still named Chibi; this is only the spoken summon word.
+    # The name "Chibi" ALSO wakes her — main.py matches it (plus a soundalike
+    # set for Whisper-tiny's mishears: cheeby/shibby/chippy/...). "computer"
+    # stays as the reliable fallback since Whisper transcribes it every time.
     wake_word: str = "computer"
     wake_window_seconds: float = 22.0        # Window stays open this long after
                                              # each real exchange for follow-ups.
@@ -162,6 +162,11 @@ class Config:
     # spontaneous impulses (morning greeting, milestones, topic callbacks,
     # weather/news/market reactions). State lives in ~/.chibi-soul.json.
     soul_enabled: bool = True
+    # Spontaneous talking master switch. False = Chibi only ever speaks in
+    # response to input (alarms still ring — they're not impulses). Mood and
+    # relationship tracking keep running; she just doesn't pipe up on her own.
+    # OFF for this unit — she lives in the bedroom.
+    impulses_enabled: bool = False
     # Minimum seconds between spoken impulses. Impulses only fire while idle
     # — never during an alarm, Thoth mode, generation, or speech.
     impulse_min_interval: float = 300.0

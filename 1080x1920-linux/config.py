@@ -56,6 +56,7 @@ class Config:
     neon_accent: tuple = (180, 60, 255)     # Purple
     neon_warning: tuple = (255, 200, 50)    # Amber
     scanlines: bool = True
+    clock_font_size: int = 40
 
     # ── Chat Bubble ──────────────────────────────────────────────────────
     bubble_font_size: int = 16
@@ -157,6 +158,10 @@ class Config:
     # spontaneous impulses (morning greeting, milestones, topic callbacks,
     # weather/news/market reactions). State lives in ~/.chibi-soul.json.
     soul_enabled: bool = True
+    # Spontaneous talking master switch. False = Chibi only ever speaks in
+    # response to input (alarms still ring — they're not impulses). Mood and
+    # relationship tracking keep running; she just doesn't pipe up on her own.
+    impulses_enabled: bool = False
     # Minimum seconds between spoken impulses. Impulses only fire while idle
     # — never during an alarm, Thoth mode, generation, or speech.
     impulse_min_interval: float = 300.0

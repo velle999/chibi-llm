@@ -896,6 +896,10 @@ class ChibiAvatarApp:
         if wake and wake in lower:
             return True
         words = re.findall(r"[a-z']+", lower)
+        # Her actual name also wakes her — the soundalike set + fuzzy matcher
+        # catch the ways Whisper-tiny mangles "Chibi" when it does come through.
+        if any(_sounds_like_chibi(w) for w in words):
+            return True
         return any(
             len(w) >= 4 and difflib.SequenceMatcher(None, w, wake).ratio() >= 0.8
             for w in words
@@ -1398,7 +1402,8 @@ class ChibiAvatarApp:
             if self._soul_feed_timer >= 10.0:
                 self._soul_feed_timer = 0.0
                 self._notify_soul_of_feeds()
-            if (not self.is_generating and not self.horus_mode
+            if (getattr(self.config, "impulses_enabled", True)
+                    and not self.is_generating and not self.horus_mode
                     and self.state in (AvatarState.IDLE, AvatarState.SLEEPING)
                     and not (self.voice_out and self.voice_out.busy)
                     and time.time() - self._last_impulse_spoken
