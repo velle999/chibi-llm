@@ -960,7 +960,7 @@ class ChibiAvatarApp:
         self.bubble.set_text(impulse)
         if self.voice_out:
             self.voice_out.speak(impulse)
-        # Velle can answer without the wake word.
+        # the user can answer without the wake word.
         self._open_wake_window()
         self.last_interaction = time.time()
 
@@ -982,9 +982,9 @@ class ChibiAvatarApp:
             # ANY other input while ringing = dismiss. HAPPY settles back to
             # IDLE from update() — no blocking sleep on the main thread.
             self.alarm.dismiss()
-            self.bubble.set_text("Good morning Velle! Have a great day! :3")
+            self.bubble.set_text(f"Good morning {self.config.user_name}! Have a great day! :3")
             if self.voice_out:
-                self.voice_out.speak_now("Good morning Velle! Have a great day!")
+                self.voice_out.speak_now(f"Good morning {self.config.user_name}! Have a great day!")
             self.set_state(AvatarState.HAPPY)
             self.last_interaction = time.time()
             return
@@ -1151,7 +1151,7 @@ class ChibiAvatarApp:
                     extra_system += (
                         f"\n\n[VISION — what you currently see through your camera]\n"
                         f"{scene_desc}\n"
-                        f"Use this to answer Velle's question about what you see."
+                        f"Use this to answer {self.config.user_name}'s question about what you see."
                     )
             elif self.vision and self.vision.last_description:
                 # Passive awareness — background scene context
@@ -1171,7 +1171,7 @@ class ChibiAvatarApp:
                     and self._wants_live_data(latest_user)):
                 extra_system += (
                     "\n\n--- BACKGROUND REFERENCE DATA (DO NOT mention unless asked) ---\n"
-                    "This data is available if Velle asks about weather, time, stocks, or crypto. "
+                    f"This data is available if {self.config.user_name} asks about weather, time, stocks, or crypto. "
                     "Do NOT volunteer this information. Only use it to answer relevant questions.\n"
                     + live_context
                 )
@@ -1224,7 +1224,7 @@ class ChibiAvatarApp:
             if self.soul:
                 self.soul.on_interaction(latest_user, full_response)
             # Keep the conversation window open for a beat after Chibi finishes
-            # so Velle's immediate follow-up doesn't need the wake word again.
+            # so the user's immediate follow-up doesn't need the wake word again.
             self._open_wake_window()
             # (the Horus journal entry was recorded up front, concurrently)
             # Track interaction
@@ -1334,9 +1334,9 @@ class ChibiAvatarApp:
                             else:
                                 # Any voice input = dismiss
                                 self.alarm.dismiss()
-                                self.bubble.set_text("Good morning Velle! :3")
+                                self.bubble.set_text(f"Good morning {self.config.user_name}! :3")
                                 if self.voice_out:
-                                    self.voice_out.speak_now("Good morning Velle! Have a great day!")
+                                    self.voice_out.speak_now(f"Good morning {self.config.user_name}! Have a great day!")
                                 self.set_state(AvatarState.HAPPY)
                                 self.last_interaction = time.time()
 
@@ -1604,9 +1604,9 @@ class ChibiAvatarApp:
                     elif self.state == AvatarState.ALARM:
                         # Any keypress dismisses alarm
                         self.alarm.dismiss()
-                        self.bubble.set_text("Good morning Velle! :3")
+                        self.bubble.set_text(f"Good morning {self.config.user_name}! :3")
                         if self.voice_out:
-                            self.voice_out.speak_now("Good morning Velle!")
+                            self.voice_out.speak_now(f"Good morning {self.config.user_name}!")
                         self.set_state(AvatarState.HAPPY)
                         self.last_interaction = time.time()
 

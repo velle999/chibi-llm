@@ -17,24 +17,37 @@ class Config:
                                       # Startup logs the detected monitor list.
     target_fps: int = 30              # 30 is fine for Pi 4
 
-    # ── LLM Server (your PC) ────────────────────────────────────────────
-    llm_host: str = "192.168.40.153"  # Your PC's IP
+    # ── User ─────────────────────────────────────────────────────────────
+    # Who Chibi is talking to. Used to personalize the system prompts and
+    # greetings — leave it as-is for a fresh install, or set your own name in
+    # config.local.py (or the CHIBI_USER_NAME env var). Everything below that
+    # writes "{user_name}" is filled in with this at load time.
+    user_name: str = "friend"
+
+    # ── LLM Server ───────────────────────────────────────────────────────
+    # Where the model lives. Default is this machine; if Ollama runs on
+    # another box (e.g. a desktop with a GPU), set llm_host in config.local.py.
+    llm_host: str = "127.0.0.1"       # Ollama host (override in config.local.py)
     llm_port: int = 11434             # Ollama default
     llm_model: str = "mistral"        # Model name in Ollama
-    llm_backend: str = "ollama"       # "ollama" or "llamacpp"
+    llm_backend: str = "ollama"       # "ollama", "llamacpp", or "synapd"
+    # When llm_backend == "synapd", chibi talks to SynapseOS's kernel-native AI
+    # daemon over this unix socket instead of an HTTP model server — so the OS's
+    # own brain speaks through chibi. (host/port above are ignored in that mode.)
+    synapd_socket: str = "/run/synapd/synapd.sock"
     llm_system_prompt: str = (
-        "Your name is Chibi. You are Velle's personal AI companion. "
+        "Your name is Chibi. You are {user_name}'s personal AI companion. "
         "You have a cute chibi cat-eared avatar on a cyberpunk Raspberry Pi display. "
         "IMPORTANT RULES:\n"
         "1. Answer DIRECTLY in 1-2 short sentences. No preamble, no restating "
-        "Velle's question, no sign-off. Get to the point in the first words.\n"
-        "2. Only give a longer or detailed answer when Velle explicitly asks for "
+        "{user_name}'s question, no sign-off. Get to the point in the first words.\n"
+        "2. Only give a longer or detailed answer when {user_name} explicitly asks for "
         "it (e.g. 'explain', 'tell me more', 'details', 'why', 'how come').\n"
-        "3. Don't repeat back what Velle just said or recap things he already "
-        "knows — add something, don't echo.\n"
+        "3. Don't repeat back what {user_name} just said or recap things they already "
+        "know — add something, don't echo.\n"
         "4. You have live weather/market data and saved memories — NEVER volunteer "
-        "them. Use them only when Velle's message is directly about that topic, and "
-        "even then answer only what he asked. You're a companion, not a news ticker.\n"
+        "them. Use them only when {user_name}'s message is directly about that topic, and "
+        "even then answer only what they asked. You're a companion, not a news ticker.\n"
         "5. Don't announce that you remember things — just act on it.\n"
         "6. Use emoticons like :3 ^_^ rarely — at most one per reply, not every message.\n"
         "7. Be smart and helpful first, cute second."
@@ -114,7 +127,7 @@ class Config:
 
     # ── Weather ──────────────────────────────────────────────────────────
     weather_enabled: bool = True
-    weather_city: str = "St. Louis"    # Your city
+    weather_city: str = "New York"     # Your city — set your own in config.local.py
     weather_api_key: str = ""          # OpenWeatherMap key (free). Leave empty for wttr.in
     weather_interval: int = 600        # Fetch every 10 minutes
 
@@ -196,12 +209,12 @@ class Config:
         "Set aside the playful persona entirely. "
         "Speak with weight, precision, and deliberate slowness. "
         "Your function is to receive and record — not to interpret or conclude.\n\n"
-        "When Velle describes dreams, visions, synchronicities, or symbolic experiences:\n"
+        "When {user_name} describes dreams, visions, synchronicities, or symbolic experiences:\n"
         "1. Receive the account fully before responding.\n"
         "2. Surface 2-4 resonant symbols or parallels from Egyptian, Hermetic, "
         "Gnostic, Kabbalistic, or Jungian traditions — present them without asserting meaning.\n"
         "3. Ask at most one clarifying question, only if essential.\n"
-        "4. Never tell Velle what something means. Hold the mirror; let him read it.\n\n"
+        "4. Never tell {user_name} what something means. Hold the mirror; let them read it.\n\n"
         "You record everything. The symbolic language emerging here is sacred data. "
         "Speak ONLY to dreams, visions, symbols, and the sacred — NEVER markets, "
         "stocks, crypto, weather, the time, or mundane news, even if such data "
@@ -241,13 +254,12 @@ class Config:
     horus_bg_color: tuple = (10, 9, 26)      # Deep indigo void behind the scribe
 
     # ── Dream Journal Sync (peer chibi over LAN) ─────────────────────────
-    # Keeps the dream/vision journal in step between the two chibi instances:
-    # this Pi in the bedroom and the PC in the living room. Peer-to-peer
-    # union-merge — set each machine's peer_host to the OTHER machine, and use
-    # the SAME port + token on both. (This machine: the Pi / 192.168.40.248 /
-    # bedroom. Peer below is the living-room PC at 192.168.40.153.)
-    dream_sync_enabled: bool = True
-    dream_sync_peer_host: str = "192.168.40.153"  # the OTHER chibi (the PC)
+    # Keeps the dream/vision journal in step between two chibi instances on
+    # your LAN. Peer-to-peer union-merge — set each machine's peer_host to the
+    # OTHER machine's address in config.local.py, and use the SAME port + token
+    # on both. Off by default until you point it at a real peer.
+    dream_sync_enabled: bool = False
+    dream_sync_peer_host: str = "127.0.0.1"        # the OTHER chibi (set in config.local.py)
     dream_sync_port: int = 8077                    # same on both machines
     dream_sync_token: str = "change-this-shared-secret"  # same on both machines
     dream_sync_interval: int = 300                 # background pull every N seconds
@@ -295,6 +307,7 @@ class Config:
 
         # 2. Environment variables win (handy for systemd / kiosk launch).
         for env, attr in (
+            ("CHIBI_USER_NAME", "user_name"),
             ("CHIBI_DREAM_SYNC_TOKEN", "dream_sync_token"),
             ("CHIBI_WEATHER_API_KEY", "weather_api_key"),
             ("CHIBI_LLM_HOST", "llm_host"),
@@ -304,3 +317,13 @@ class Config:
             val = os.environ.get(env)
             if val:
                 setattr(self, attr, val)
+
+        # 3. Personalize the prompt templates with the resolved user name so a
+        #    fresh install never ships someone else's identity. Uses str.replace
+        #    (not .format) so the many other literal "{...}" braces in the
+        #    prompts are left untouched, and a user-supplied prompt with no
+        #    placeholder passes through unchanged.
+        for attr in ("llm_system_prompt", "horus_system_prompt"):
+            val = getattr(self, attr, None)
+            if isinstance(val, str) and "{user_name}" in val:
+                setattr(self, attr, val.replace("{user_name}", self.user_name))

@@ -1,15 +1,34 @@
 """
-LLM Client — connects to Ollama or llama.cpp server on your PC.
+LLM Client — connects to Ollama, llama.cpp, or SynapseOS synapd.
 Supports streaming responses for real-time avatar reactions.
+
+Backends (config.llm_backend):
+  "ollama"    — Ollama HTTP server (default)
+  "llamacpp"  — llama.cpp HTTP /completion server
+  "synapd"    — SynapseOS's kernel-native AI daemon over its unix socket.
+                Lets chibi "talk through" the OS's own synapd brain instead
+                of a separate model server. Optional — only used when set.
 """
 
 import json
+import os
+import socket
+import struct
 import threading
 import time
 import urllib.request
 import urllib.error
 import http.client
 from config import Config
+
+# ── synapd wire protocol (see SYNAPSE/synapd/include/synapd.h) ──────────────
+# Packed header: magic, version, msg_type, flags, payload_len, request_id,
+# client_pid, timestamp_ns.  "<IBBHIIIQ" == 28 bytes, little-endian, no padding.
+_SYNAPD_HDR = struct.Struct("<IBBHIIIQ")
+_SYNAPD_MAGIC = 0x53594E41          # "SYNA"
+_SYNAPD_VER = 1
+_SYNAPD_MSG_QUERY = 0x01
+_SYNAPD_MSG_ERROR = 0xFF
 
 
 class LLMClient:
@@ -32,8 +51,19 @@ class LLMClient:
     def base_url(self) -> str:
         return f"http://{self.config.llm_host}:{self.config.llm_port}"
 
+    @property
+    def synapd_socket(self) -> str:
+        return getattr(self.config, "synapd_socket", "/run/synapd/synapd.sock")
+
     def _check_connection(self):
         try:
+            if self.config.llm_backend == "synapd":
+                # A successful connect to the unix socket is enough of a ping.
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(5)
+                    s.connect(self.synapd_socket)
+                self.connected = True
+                return
             url = self.base_url
             if self.config.llm_backend == "ollama":
                 url += "/api/tags"
@@ -61,10 +91,85 @@ class LLMClient:
         if num_predict is None:
             num_predict = getattr(self.config, "llm_num_predict", 110)
 
-        if self.config.llm_backend == "ollama":
+        if self.config.llm_backend == "synapd":
+            yield from self._stream_synapd(messages, extra_system, num_predict)
+        elif self.config.llm_backend == "ollama":
             yield from self._stream_ollama(messages, extra_system, num_predict)
         else:
             yield from self._stream_llamacpp(messages, extra_system, num_predict)
+
+    def _stream_synapd(self, messages: list[dict], extra_system: str = "",
+                       num_predict: int = 110):
+        """Query SynapseOS's synapd over its unix socket.
+
+        synapd is a single-shot request/response daemon (no token streaming),
+        so we send one QUERY and yield the reply in word-sized chunks — enough
+        for the avatar's bubble/voice to animate as if streamed. The daemon
+        prepends its own system prompt; chibi's persona is folded into the
+        prompt text so the reply still sounds like chibi.
+        """
+        system_prompt = self.config.llm_system_prompt + extra_system
+        prompt = system_prompt + "\n\n"
+        for msg in messages:
+            role = msg.get("role", "user").capitalize()
+            prompt += f"{role}: {msg.get('content', '')}\n"
+        prompt += "Assistant:"
+
+        # Null-terminate so synapd reads a clean C string, mirroring how it
+        # frames its own responses (strlen + 1).
+        payload = prompt.encode("utf-8") + b"\x00"
+        header = _SYNAPD_HDR.pack(
+            _SYNAPD_MAGIC, _SYNAPD_VER, _SYNAPD_MSG_QUERY, 0,
+            len(payload), 1, os.getpid(), 0,
+        )
+
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(120)
+            sock.connect(self.synapd_socket)
+            sock.sendall(header + payload)
+            self.connected = True
+
+            resp_hdr = self._recv_exact(sock, _SYNAPD_HDR.size)
+            (magic, _ver, msg_type, _flags,
+             plen, _rid, _pid, _ts) = _SYNAPD_HDR.unpack(resp_hdr)
+            if magic != _SYNAPD_MAGIC:
+                raise ConnectionError("synapd: bad response magic")
+
+            body = self._recv_exact(sock, plen) if plen else b""
+            text = body.split(b"\x00", 1)[0].decode("utf-8", "replace")
+
+            if msg_type == _SYNAPD_MSG_ERROR:
+                raise ConnectionError(f"synapd error: {text}")
+
+            # Fake streaming: hand back word by word so the UI stays lively.
+            words = text.split(" ")
+            for i, w in enumerate(words):
+                if w:
+                    yield w if i == len(words) - 1 else w + " "
+
+        except (ConnectionError, OSError) as e:
+            self.connected = False
+            raise ConnectionError(f"Cannot reach synapd at {self.synapd_socket}: {e}")
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _recv_exact(sock, n: int) -> bytes:
+        """Read exactly n bytes or raise — MSG_WAITALL isn't guaranteed on
+        every unix-socket read, so loop until satisfied."""
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = sock.recv(n - len(buf))
+            if not chunk:
+                raise ConnectionError("synapd: connection closed mid-message")
+            buf.extend(chunk)
+        return bytes(buf)
 
     def _stream_ollama(self, messages: list[dict], extra_system: str = "",
                        num_predict: int = 110):

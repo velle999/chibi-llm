@@ -202,7 +202,7 @@ class Vision:
 
         prompt = (
             "In 10 words or less, note: who's visible, what they're doing, "
-            "general scene. Example: 'Velle at desk typing, lamp on, night time'. "
+            "general scene. Example: 'person at desk typing, lamp on, night time'. "
             "If nothing notable, just say 'nothing notable'."
         )
 

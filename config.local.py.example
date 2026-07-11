@@ -1,15 +1,21 @@
 # Local config overrides — copy this file to "config.local.py" (which is
-# gitignored) and put your real secrets / hosts here. Anything you set
-# overrides the defaults in config.py, and is never committed to git.
+# gitignored) and put your real name / secrets / hosts here. Anything you set
+# overrides the neutral defaults in config.py, and is never committed to git.
 #
 #   cp config.local.py.example config.local.py
 #
+# This file is per-machine — it does not travel through git, so set it up on
+# every box that runs chibi.
+#
 # Environment variables take precedence over this file, e.g.:
-#   CHIBI_DREAM_SYNC_TOKEN=...  CHIBI_WEATHER_API_KEY=...
+#   CHIBI_USER_NAME=...  CHIBI_LLM_HOST=...  CHIBI_WEATHER_API_KEY=...
 #
 # Any attribute name from Config is valid here. Common ones:
 
-# dream_sync_token = "a-long-random-shared-secret"   # same on both machines
+# user_name        = "your-name"                     # who chibi addresses
+# weather_city     = "St. Louis"                     # for weather lookups
+# llm_host         = "192.168.40.153"                # where Ollama runs
 # weather_api_key  = "your-openweathermap-key"
-# llm_host         = "192.168.40.153"
-# dream_sync_peer_host = "raspberrypi.lan"
+# dream_sync_enabled   = True                        # LAN journal sync (2 chibis)
+# dream_sync_peer_host = "raspberrypi.lan"           # the OTHER chibi
+# dream_sync_token = "a-long-random-shared-secret"   # same on both machines

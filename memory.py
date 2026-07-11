@@ -56,7 +56,7 @@ class PersistentMemory:
             "last_interaction": None,
             "mood_counts": {},
         }
-        self.user_name: str = "Velle"  # Default, overridden by saved memory
+        self.user_name: str = "friend"  # Default, overridden by saved memory / config.user_name
 
         self._load()
 
