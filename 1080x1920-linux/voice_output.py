@@ -28,6 +28,7 @@ Setup on Pi:
 """
 
 import re
+import shutil
 import subprocess
 import threading
 import queue
@@ -39,6 +40,28 @@ import tempfile
 # Auto-detect platform for audio playback
 IS_WINDOWS = sys.platform == "win32"
 USE_APLAY = not IS_WINDOWS  # aplay on Linux, pygame.mixer on Windows
+
+# Playback back-ends, best first; "{f}" is replaced with the WAV path.
+#
+# aplay's bare `default` device leads the list — it is the right thing on a Pi —
+# but it is never trusted. ALSA only routes `default` to PipeWire when
+# /etc/alsa/conf.d/99-pipewire-default.conf exists (on Arch that symlink comes
+# from the pipewire-alsa package, NOT pipewire-audio). Without it `default`
+# falls back to dmix on card 0, and when card 0 is an HDMI-only GPU there is no
+# device 0 at all, so `aplay file.wav` dies instantly with "unable to open
+# slave / No such file or directory". voice_input.py already sidesteps the same
+# trap for capture by naming the mic explicitly rather than trusting `default`.
+#
+# So: every candidate's exit status is checked and the next one is tried on
+# failure. The old code ran `aplay -q file`, ignored the exit status, and went
+# silently mute — synthesis worked, nothing was ever heard, nothing was logged.
+PLAYERS = (
+    ["aplay", "-q", "{f}"],
+    ["pw-play", "{f}"],
+    ["paplay", "{f}"],
+    ["aplay", "-q", "-D", "pipewire", "{f}"],
+    ["aplay", "-q", "-D", "pulse", "{f}"],
+)
 
 
 class VoiceOutput:
@@ -58,6 +81,7 @@ class VoiceOutput:
         self._piper_cmd = None
         self._voice_path = None
         self._sox_available = False
+        self._play_cmd = None  # back-end that last worked; see _play_wav()
 
         self._find_piper()
         self._find_voice()
@@ -360,26 +384,52 @@ class VoiceOutput:
         except Exception as e:
             print(f"[TTS] espeak error: {e}")
 
+    def _try_player(self, template: list, filepath: str) -> bool:
+        """Run one playback back-end. True only if it actually played."""
+        argv = [filepath if a == "{f}" else a for a in template]
+        try:
+            proc = subprocess.run(argv, capture_output=True, timeout=120)
+        except FileNotFoundError:
+            return False
+        except subprocess.TimeoutExpired:
+            print(f"[TTS] {argv[0]} timed out")
+            return False
+        except Exception as e:
+            print(f"[TTS] {argv[0]} error: {e}")
+            return False
+
+        if proc.returncode != 0:
+            err = proc.stderr.decode(errors="replace").strip().splitlines()
+            print(f"[TTS] {' '.join(argv[:-1])} failed (rc={proc.returncode}): "
+                  f"{err[-1] if err else 'no output'}")
+            return False
+        return True
+
     def _play_wav(self, filepath: str):
-        """Play a WAV file — prefer aplay on Pi, with hard timeout."""
+        """Play a WAV through the first back-end that works, with hard timeout."""
         if not os.path.exists(filepath):
             return
 
         if USE_APLAY:
-            try:
-                subprocess.run(
-                    ["aplay", "-q", filepath],
-                    capture_output=True,
-                    timeout=120,
-                )
+            # Stick with whatever worked last; re-probe if it stops working, so
+            # a sink that vanished (unplug, PipeWire restart) can't mute Chibi
+            # permanently.
+            if self._play_cmd and self._try_player(self._play_cmd, filepath):
                 return
-            except FileNotFoundError:
-                pass  # Fall through to pygame
-            except subprocess.TimeoutExpired:
-                print("[TTS] aplay timed out")
-                return
-            except Exception as e:
-                print(f"[TTS] aplay error: {e}")
+            self._play_cmd = None
+
+            for template in PLAYERS:
+                if not shutil.which(template[0]):
+                    continue
+                if self._try_player(template, filepath):
+                    self._play_cmd = template
+                    print("[TTS] Playback: "
+                          f"{' '.join(a for a in template if a != '{f}')}")
+                    return
+
+            print("[TTS] ⚠ No working audio output — tried "
+                  f"{', '.join(p[0] for p in PLAYERS)}. On Arch, ALSA's default "
+                  "device is unrouted without: pacman -S pipewire-alsa")
 
         # Fallback: pygame.mixer
         try:
