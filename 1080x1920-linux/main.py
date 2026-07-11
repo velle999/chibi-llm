@@ -35,6 +35,7 @@ from hud_overlay import HUDOverlay
 from memory import PersistentMemory
 from soul import Soul
 from thoth import ThothCorpus
+from secfeed import SecFeed
 from vision import Vision, is_vision_request
 from alarm import (AlarmManager, is_alarm_request, is_dismiss_word,
                    is_snooze_word, parse_alarm_time, parse_alarm_repeat,
@@ -484,6 +485,15 @@ class ChibiAvatarApp:
         self.horus_auto_triggered = False
         self._horus_check_timer = 0.0
 
+        # Security / sentinel mode. The feed subscriber runs from startup, not
+        # from mode entry, so that on entering the aspect there is already a
+        # session's worth of verdicts to report rather than an empty feed.
+        self.security_mode = False
+        self.secfeed = None
+        if getattr(self.config, "security_enabled", False):
+            self.secfeed = SecFeed()
+            self.secfeed.start()
+
         # Dream journal viewer (F2 overlay)
         self.dream_view_open = False
         self._dream_view_entries: list[dict] = []
@@ -606,6 +616,101 @@ class ChibiAvatarApp:
         self.bubble.set_text(closing)
         if self.voice_out:
             self.voice_out.speak(closing)
+
+    # ── Security / sentinel aspect ───────────────────────────────────────
+    def _enter_security_mode(self):
+        """Activate the sentinel aspect and deliver the security overview."""
+        self.security_mode = True
+        # The two aspects are mutually exclusive: the scribe and the sentinel
+        # have contradictory system prompts, and both would be injected.
+        self.horus_mode = False
+        print("[Security] Sentinel mode activated.")
+
+        overview = (self.secfeed.overview() if self.secfeed
+                    else "Security monitoring is disabled in my config.")
+        opening = "Sentinel online. " + overview
+        self.conversation.append({"role": "assistant", "content": opening})
+        self.bubble.set_text(opening)
+        if self.voice_out:
+            self.voice_out.speak(opening)
+        # Entering the aspect is itself an acknowledgement of whatever is
+        # already queued, so don't immediately re-announce the same events.
+        if self.secfeed:
+            self.secfeed.drain_notable()
+
+    def _exit_security_mode(self):
+        """Return to Chibi aspect."""
+        self.security_mode = False
+        print("[Security] Sentinel standing down.")
+        closing = "Sentinel offline. I'm Chibi again :3"
+        self.conversation.append({"role": "assistant", "content": closing})
+        self.bubble.set_text(closing)
+        if self.voice_out:
+            self.voice_out.speak(closing)
+
+    def _check_security_triggers(self, text: str) -> bool:
+        """Security-mode switch commands. True if the input was consumed.
+
+        MUST be checked before _check_horus_triggers(): that one treats *any*
+        short utterance ending in "mode" as a Horus entry (Whisper-tiny cannot
+        reliably transcribe "Horus"), so "security mode" would otherwise open
+        the dream journal instead of the sentinel.
+        """
+        if not self.secfeed:
+            return False
+        lower = text.lower().strip()
+
+        if self.security_mode:
+            cmd = lower.strip(" .,!?\"'")
+            words = re.findall(r"[a-z']+", lower)
+            is_short = len(words) <= 4
+            if (any(p in lower for p in self.config.security_exit_phrases)
+                    or cmd in ("exit", "quit", "done", "stop", "chibi")
+                    or (is_short and any(_sounds_like_chibi(w) for w in words))):
+                self._exit_security_mode()
+                return True
+            # A bare "status"/"overview" while already in the aspect re-reads
+            # the live feed without a round-trip through the LLM.
+            if cmd in ("status", "overview", "security status", "security overview",
+                       "report", "sitrep"):
+                summary = self.secfeed.overview()
+                self.conversation.append({"role": "assistant", "content": summary})
+                self.bubble.set_text(summary)
+                if self.voice_out:
+                    self.voice_out.speak(summary)
+                self.secfeed.drain_notable()
+                return True
+            return False
+
+        for phrase in self.config.security_entry_phrases:
+            if phrase in lower:
+                self._enter_security_mode()
+                return True
+        return False
+
+    def _announce_security_events(self):
+        """While the sentinel is up, speak new notable verdicts as they land."""
+        if not (self.security_mode and self.secfeed
+                and self.config.security_announce):
+            return
+        # Don't talk over an in-flight reply or another utterance.
+        if self.is_generating or (self.voice_out and self.voice_out.busy):
+            return
+        events = self.secfeed.drain_notable()
+        if not events:
+            return
+        # A burst of verdicts (a scan, a misbehaving process in a loop) must not
+        # become a burst of speech — collapse it into one utterance.
+        if len(events) == 1:
+            msg = "Security event: " + events[0].describe()
+        else:
+            worst = max(events, key=lambda e: (e.verdict, e.threat))
+            msg = (f"{len(events)} security events. "
+                   f"Most severe: {worst.describe()}")
+        self.conversation.append({"role": "assistant", "content": msg})
+        self.bubble.set_text(msg)
+        if self.voice_out:
+            self.voice_out.speak(msg)
 
     # ── Dream journal viewer (F2) ────────────────────────────────────────
     def _open_dream_view(self):
@@ -884,7 +989,7 @@ class ChibiAvatarApp:
             return True  # any voice dismisses a ringing alarm (handled downstream)
         if time.time() < self._wake_until:
             return True
-        if self.horus_mode:
+        if self.horus_mode or self.security_mode:
             return True
         # Wake word — configurable (default "computer"). Whisper-tiny can't
         # reliably transcribe "Chibi" (it comes out be/TV/CB/baby), so the spoken
@@ -960,7 +1065,7 @@ class ChibiAvatarApp:
         self.bubble.set_text(impulse)
         if self.voice_out:
             self.voice_out.speak(impulse)
-        # Velle can answer without the wake word.
+        # the user can answer without the wake word.
         self._open_wake_window()
         self.last_interaction = time.time()
 
@@ -982,9 +1087,9 @@ class ChibiAvatarApp:
             # ANY other input while ringing = dismiss. HAPPY settles back to
             # IDLE from update() — no blocking sleep on the main thread.
             self.alarm.dismiss()
-            self.bubble.set_text("Good morning Velle! Have a great day! :3")
+            self.bubble.set_text(f"Good morning {self.config.user_name}! Have a great day! :3")
             if self.voice_out:
-                self.voice_out.speak_now("Good morning Velle! Have a great day!")
+                self.voice_out.speak_now(f"Good morning {self.config.user_name}! Have a great day!")
             self.set_state(AvatarState.HAPPY)
             self.last_interaction = time.time()
             return
@@ -1035,6 +1140,10 @@ class ChibiAvatarApp:
             if self.voice_out:
                 self.voice_out.speak(reply)
             self.last_interaction = time.time()
+            return
+        # ── Security mode trigger check ───────────────────────────────────
+        # Before Horus: its fallback claims any short "<x> mode" utterance.
+        if self._check_security_triggers(text):
             return
         # ── Horus mode trigger check ──────────────────────────────────────
         if self._check_horus_triggers(text):
@@ -1105,6 +1214,14 @@ class ChibiAvatarApp:
             memory_context = self.memory.get_context()
 
             extra_system = ""
+            if self.security_mode:
+                # Re-read the feed at generation time, not at mode entry: the
+                # answer must reflect the system as it is *now*, and the model
+                # is told to report only what this block says.
+                extra_system += self.config.security_system_prompt
+                overview = (self.secfeed.overview() if self.secfeed
+                            else "Security monitoring is disabled.")
+                extra_system += "\n\n[SECURITY STATUS — live from synguard]\n" + overview
             if self.horus_mode:
                 extra_system += self.config.horus_system_prompt
                 extra_system += "\n\n" + memory_context
@@ -1139,7 +1256,7 @@ class ChibiAvatarApp:
 
             # Soul — mood / relationship context (Chibi aspect only; the
             # scribe stays out of Chibi's inner weather)
-            if self.soul and not self.horus_mode:
+            if self.soul and not self.horus_mode and not self.security_mode:
                 mood_ctx = self.soul.get_mood_context()
                 if mood_ctx:
                     extra_system += "\n\n" + mood_ctx
@@ -1151,7 +1268,7 @@ class ChibiAvatarApp:
                     extra_system += (
                         f"\n\n[VISION — what you currently see through your camera]\n"
                         f"{scene_desc}\n"
-                        f"Use this to answer Velle's question about what you see."
+                        f"Use this to answer {self.config.user_name}'s question about what you see."
                     )
             elif self.vision and self.vision.last_description:
                 # Passive awareness — background scene context
@@ -1167,11 +1284,11 @@ class ChibiAvatarApp:
             latest_user = next(
                 (m["content"] for m in reversed(self.conversation)
                  if m["role"] == "user"), "")
-            if (live_context and not self.horus_mode
+            if (live_context and not self.horus_mode and not self.security_mode
                     and self._wants_live_data(latest_user)):
                 extra_system += (
                     "\n\n--- BACKGROUND REFERENCE DATA (DO NOT mention unless asked) ---\n"
-                    "This data is available if Velle asks about weather, time, stocks, or crypto. "
+                    f"This data is available if {self.config.user_name} asks about weather, time, stocks, or crypto. "
                     "Do NOT volunteer this information. Only use it to answer relevant questions.\n"
                     + live_context
                 )
@@ -1224,7 +1341,7 @@ class ChibiAvatarApp:
             if self.soul:
                 self.soul.on_interaction(latest_user, full_response)
             # Keep the conversation window open for a beat after Chibi finishes
-            # so Velle's immediate follow-up doesn't need the wake word again.
+            # so the user's immediate follow-up doesn't need the wake word again.
             self._open_wake_window()
             # (the Horus journal entry was recorded up front, concurrently)
             # Track interaction
@@ -1281,6 +1398,9 @@ class ChibiAvatarApp:
             self._horus_check_timer = 0.0
             self._check_horus_threshold()
 
+        # Sentinel: narrate verdicts that landed since the last frame.
+        self._announce_security_events()
+
         # ── Alarm ringing check ──────────────────────────────────────────
         if self.alarm.is_ringing and self.state != AvatarState.ALARM:
             self.set_state(AvatarState.ALARM)
@@ -1334,9 +1454,9 @@ class ChibiAvatarApp:
                             else:
                                 # Any voice input = dismiss
                                 self.alarm.dismiss()
-                                self.bubble.set_text("Good morning Velle! :3")
+                                self.bubble.set_text(f"Good morning {self.config.user_name}! :3")
                                 if self.voice_out:
-                                    self.voice_out.speak_now("Good morning Velle! Have a great day!")
+                                    self.voice_out.speak_now(f"Good morning {self.config.user_name}! Have a great day!")
                                 self.set_state(AvatarState.HAPPY)
                                 self.last_interaction = time.time()
 
@@ -1404,6 +1524,7 @@ class ChibiAvatarApp:
                 self._notify_soul_of_feeds()
             if (getattr(self.config, "impulses_enabled", True)
                     and not self.is_generating and not self.horus_mode
+                    and not self.security_mode
                     and self.state in (AvatarState.IDLE, AvatarState.SLEEPING)
                     and not (self.voice_out and self.voice_out.busy)
                     and time.time() - self._last_impulse_spoken
@@ -1485,6 +1606,13 @@ class ChibiAvatarApp:
             self.lightning_flash -= dt
 
     def draw_background(self, t):
+        # The sentinel sheds the scene entirely — no stars, no neon grid, no
+        # weather. A bare dark field, so the only thing moving on screen is the
+        # security state itself. (Hence the early return: unlike Thoth below,
+        # which keeps the ambience, this aspect deliberately skips it.)
+        if self.security_mode:
+            self.screen.fill(self.config.security_bg_color)
+            return
         # In the Thoth aspect the neon void deepens to indigo and a vast,
         # faint Eye of Horus presides over the scene.
         if self.horus_mode:
@@ -1604,9 +1732,9 @@ class ChibiAvatarApp:
                     elif self.state == AvatarState.ALARM:
                         # Any keypress dismisses alarm
                         self.alarm.dismiss()
-                        self.bubble.set_text("Good morning Velle! :3")
+                        self.bubble.set_text(f"Good morning {self.config.user_name}! :3")
                         if self.voice_out:
-                            self.voice_out.speak_now("Good morning Velle!")
+                            self.voice_out.speak_now(f"Good morning {self.config.user_name}!")
                         self.set_state(AvatarState.HAPPY)
                         self.last_interaction = time.time()
 
@@ -1699,6 +1827,38 @@ class ChibiAvatarApp:
                 lx = self.config.window_width // 2 - label.get_width() // 2
                 self.screen.blit(label, (lx, 18))
 
+            # ── Sentinel aspect overlay ──────────────────────────────────
+            # Amber vignette, going red once synguard has actually blocked
+            # something — the frame colour is real state, not decoration.
+            if self.security_mode and self.state != AvatarState.ALARM:
+                if not hasattr(self, '_sentinel_font'):
+                    self._sentinel_font = pygame.font.SysFont("monospace", 20, bold=True)
+
+                blocked = bool(self.secfeed and any(
+                    e.notable for e in self.secfeed.recent(20)))
+                hue = (self.config.security_red if blocked
+                       else self.config.security_amber)
+                # Blocked traffic pulses fast and urgently; a quiet system breathes.
+                breath = 0.5 + 0.5 * math.sin(t * (4.0 if blocked else 1.2))
+
+                vign = pygame.Surface(
+                    (self.config.window_width, self.config.window_height), pygame.SRCALPHA
+                )
+                pygame.draw.rect(
+                    vign, (*hue, int(50 + 40 * breath)),
+                    (0, 0, self.config.window_width, self.config.window_height),
+                    width=2, border_radius=4,
+                )
+                self.screen.blit(vign, (0, 0))
+
+                text = "— SENTINEL —"
+                if self.secfeed and not self.secfeed.available:
+                    text = "— SENTINEL: NO FEED —"
+                label = self._sentinel_font.render(text, True, hue)
+                label.set_alpha(int(150 + 80 * breath))
+                lx = self.config.window_width // 2 - label.get_width() // 2
+                self.screen.blit(label, (lx, 18))
+
             # Scanlines overlay
             if self.config.scanlines:
                 self.screen.blit(self.scanline_surf, (0, 0))
@@ -1778,6 +1938,8 @@ class ChibiAvatarApp:
         self.alarm.stop()
         if self.vision:
             self.vision.stop()
+        if self.secfeed:
+            self.secfeed.stop()
         if self.voice_in:
             self.voice_in.cleanup()
         if self.voice_out:

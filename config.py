@@ -253,6 +253,64 @@ class Config:
     horus_lapis: tuple = (70, 90, 180)       # Deep lapis (replaces secondary)
     horus_bg_color: tuple = (10, 9, 26)      # Deep indigo void behind the scribe
 
+    # ── Security Mode (synguard aspect) ──────────────────────────────────
+    # A third aspect, alongside Chibi and Thoth: the sentinel. Subscribes to
+    # synguard's verdict feed (/run/synguard.sock) and narrates what the system
+    # security monitor is doing. SynapseOS only — on any other box the feed
+    # simply never appears and the aspect reports the monitor as absent.
+    security_enabled: bool = True
+
+    # Speak notable verdicts (alert/escalate/deny/quarantine, or threat >=
+    # medium) aloud as they arrive, while in security mode. Routine allow/log
+    # traffic is never announced — it would be a constant murmur.
+    security_announce: bool = True
+
+    security_system_prompt: str = (
+        "\n\n[ASPECT SHIFT — SECURITY MODE ACTIVE]\n"
+        "You are now the sentinel aspect of this companion, reporting on the "
+        "security state of this SynapseOS machine. "
+        "Set the playful persona aside: be calm, precise, and factual. "
+        "Do not use emoticons.\n\n"
+        "The SECURITY STATUS block in your context is live data from synguard, "
+        "the system security monitor. Rules:\n"
+        "1. Report ONLY what that block actually says. Never invent a process, "
+        "a verdict, a threat level, or an intrusion.\n"
+        "2. If the block says the monitor is stopped or unreachable, say so "
+        "plainly — an absent monitor is NOT a clean system, and you must never "
+        "describe an unmonitored machine as safe.\n"
+        "3. If nothing has been blocked or flagged, say the system is quiet. "
+        "Do not manufacture alarm.\n"
+        "4. You OBSERVE only. You cannot block, kill, quarantine, or allow "
+        "anything — synguard decides, you narrate. If {user_name} asks you to "
+        "block or kill something, say plainly that you cannot, and point them "
+        "at `syn guard`.\n"
+        "5. Explain what a verdict means in plain language when asked."
+    )
+
+    security_entry_phrases: list = field(default_factory=lambda: [
+        "enter security mode",
+        "security mode",
+        "security overview",
+        "security status",
+        "sentinel",
+        "am i being attacked",
+        "is the system safe",
+    ])
+
+    security_exit_phrases: list = field(default_factory=lambda: [
+        "exit security mode",
+        "leave security mode",
+        "chibi mode",
+        "return to chibi",
+        "stand down",
+    ])
+
+    # Sentinel palette — cold amber-on-black alert scheme, distinct from both
+    # Chibi's neon and Thoth's gold/lapis.
+    security_amber: tuple = (255, 176, 0)     # warning amber (replaces primary)
+    security_red: tuple = (220, 60, 60)       # deny/critical red (secondary)
+    security_bg_color: tuple = (18, 8, 8)     # near-black with a red cast
+
     # ── Dream Journal Sync (peer chibi over LAN) ─────────────────────────
     # Keeps the dream/vision journal in step between two chibi instances on
     # your LAN. Peer-to-peer union-merge — set each machine's peer_host to the
@@ -323,7 +381,8 @@ class Config:
         #    (not .format) so the many other literal "{...}" braces in the
         #    prompts are left untouched, and a user-supplied prompt with no
         #    placeholder passes through unchanged.
-        for attr in ("llm_system_prompt", "horus_system_prompt"):
+        for attr in ("llm_system_prompt", "horus_system_prompt",
+                     "security_system_prompt"):
             val = getattr(self, attr, None)
             if isinstance(val, str) and "{user_name}" in val:
                 setattr(self, attr, val.replace("{user_name}", self.user_name))
