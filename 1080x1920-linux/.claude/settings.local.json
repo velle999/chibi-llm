@@ -18,7 +18,9 @@
       "Bash(scp -q /home/velle/Documents/chibi-llm/voice_output.py velle@raspberrypi.lan:~/chibi-llm-main/voice_output.py)",
       "Bash(grep -vE \"onnxruntime|DiscoverDevices|GPU device|^$\")",
       "Bash(scp -q /home/velle/Documents/chibi-llm/main.py velle@raspberrypi.lan:~/chibi-llm-main/main.py)",
-      "Bash(python3 -m py_compile main.py 1080x1920-linux/main.py)"
+      "Bash(python3 -m py_compile main.py 1080x1920-linux/main.py)",
+      "Bash(SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy timeout 70 /home/velle/chibi-llm/.venv/bin/python -u main.py)",
+      "Bash(echo \"exit: $?\")"
     ]
   }
 }

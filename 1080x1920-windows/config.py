@@ -91,6 +91,12 @@ class Config:
     # ── Voice ────────────────────────────────────────────────────────────
     voice_enabled: bool = True
     stt_model: str = "tiny"                  # Whisper model: "tiny", "base", "small"
+    # Directory holding an already-converted faster-whisper model. Empty = let
+    # faster-whisper fetch `stt_model` from HuggingFace on first run (needs
+    # network). The SynapseOS package ships the model and points this at
+    # /usr/share/faster-whisper/tiny so a fresh install can hear you offline.
+    # Override with CHIBI_STT_MODEL_DIR.
+    stt_model_dir: str = ""
     tts_voice: str = "en_GB-cori-medium"     # Bright British female — sounds cute
     tts_speed: float = 1.1                   # Slightly faster = perkier
     tts_pitch_semitones: int = 2             # Shift up 2 semitones for extra cute
@@ -371,6 +377,12 @@ class Config:
             ("CHIBI_LLM_HOST", "llm_host"),
             ("CHIBI_DREAM_SYNC_PEER_HOST", "dream_sync_peer_host"),
             ("CHIBI_CALENDAR_ICS_URL", "calendar_ics_url"),
+            # Set by the SynapseOS launcher: talk to synapd (the OS's own AI
+            # daemon) and load the packaged STT model, so chibi works on a
+            # fresh install with no Ollama and no network.
+            ("CHIBI_LLM_BACKEND", "llm_backend"),
+            ("CHIBI_SYNAPD_SOCKET", "synapd_socket"),
+            ("CHIBI_STT_MODEL_DIR", "stt_model_dir"),
         ):
             val = os.environ.get(env)
             if val:

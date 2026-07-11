@@ -110,9 +110,16 @@ class VoiceInput:
     def __init__(self, model_size="tiny", device="cpu", compute_type="int8",
                  silence_threshold=SILENCE_THRESHOLD,
                  min_speech_duration=MIN_SPEECH_DURATION,
-                 oww_enabled=False, oww_model="", oww_threshold=0.5):
+                 oww_enabled=False, oww_model="", oww_threshold=0.5,
+                 model_dir=""):
         """
         model_size: "tiny", "base", "small" — tiny recommended for Pi 4
+        model_dir: path to an already-converted faster-whisper model directory.
+            When set, it is loaded directly instead of `model_size` — which is
+            what makes offline startup possible: a bare model NAME sends
+            faster-whisper to HuggingFace to download ~75MB on first run, so a
+            freshly installed machine with no network would come up deaf. The
+            SynapseOS package ships the model and points this at it.
         device: "cpu" for Pi
         compute_type: "int8" for Pi (fastest), "float32" for accuracy
         silence_threshold: mean-amplitude floor to start recording. Higher =
@@ -124,6 +131,7 @@ class VoiceInput:
             the package/model isn't available.
         """
         self.model_size = model_size
+        self.model_dir = model_dir
         self.device = device
         self.compute_type = compute_type
         self.silence_threshold = silence_threshold
@@ -158,9 +166,19 @@ class VoiceInput:
         """Load Whisper model in background."""
         try:
             from faster_whisper import WhisperModel
-            print(f"[Voice] Loading Whisper {self.model_size} model...")
+            # A local directory is loaded as-is; a bare size name makes
+            # faster-whisper fetch it from HuggingFace on first run.
+            if self.model_dir and os.path.isdir(self.model_dir):
+                target = self.model_dir
+                print(f"[Voice] Loading Whisper from {target} (offline)...")
+            else:
+                if self.model_dir:
+                    print(f"[Voice] stt_model_dir {self.model_dir!r} not found — "
+                          "falling back to download")
+                target = self.model_size
+                print(f"[Voice] Loading Whisper {target} model...")
             self.model = WhisperModel(
-                self.model_size,
+                target,
                 device=self.device,
                 compute_type=self.compute_type,
             )

@@ -422,6 +422,7 @@ class ChibiAvatarApp:
                 oww_enabled=getattr(self.config, "oww_enabled", False),
                 oww_model=getattr(self.config, "oww_model", ""),
                 oww_threshold=getattr(self.config, "oww_threshold", 0.5),
+                model_dir=getattr(self.config, "stt_model_dir", ""),
             )
             self.voice_in.start_listening()
 

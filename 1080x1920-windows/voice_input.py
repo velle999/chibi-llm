@@ -1,33 +1,44 @@
 """
-Voice Input — Speech-to-text using faster-whisper + sounddevice.
+Voice Input — Speech-to-text using faster-whisper (CTranslate2 optimized Whisper).
+Runs locally on the Pi 4 using the tiny model for low latency.
 
-Uses callback-based InputStream to avoid Windows blocking API bugs.
-Prioritizes DirectSound/MME host APIs which handle sample rate
-conversion internally (WASAPI exclusive mode does not).
+Audio capture is done by streaming raw PCM from an external recorder subprocess
+(`arecord` or, as a fallback, `pw-record`). This deliberately AVOIDS
+PortAudio / PyAudio / sounddevice: libportaudio hard-links libjack, and merely
+initializing it spawns a pipewire-jack client whose data loop can segfault the
+whole process (a native crash Python cannot catch). The recorder subprocesses
+talk to ALSA / PipeWire directly and never load libjack.
 
 Install:
-    pip install faster-whisper sounddevice numpy
+    pip install faster-whisper --break-system-packages
+    # capture needs one of:  alsa-utils (arecord)  or  pipewire (pw-record)
 """
 
+import os
 import re
 import threading
 import queue
 import time
+import shutil
+import subprocess
 import numpy as np
-import sys
-
 
 # Audio config
-TARGET_RATE = 16000
-SILENCE_THRESHOLD = 500
-SILENCE_DURATION = 1.5
-MIN_SPEECH_DURATION = 0.5
-MAX_SPEECH_DURATION = 30.0
+RATE = 16000
+CHANNELS = 1
+CHUNK = 1024
+SILENCE_THRESHOLD = 500       # Amplitude threshold for silence detection
+SILENCE_DURATION = 1.5        # Seconds of silence to trigger end of speech
+MIN_SPEECH_DURATION = 0.5     # Minimum seconds of speech to process
+MAX_SPEECH_DURATION = 30.0    # Maximum recording duration
+
+_BYTES_PER_SAMPLE = 2         # s16le
 
 # Whisper-tiny hallucinates these stock phrases on low-level noise / near-silence
 # (TV hum, fan, a cough). They're indistinguishable from real one-word replies by
 # text alone, so we drop any transcription whose normalized form is exactly one of
-# these. Multi-word real speech ("you were right") is unaffected.
+# these. Multi-word real speech ("you were right") is unaffected — only the bare
+# phrase matches.
 _NOISE_HALLUCINATIONS = {
     "", "you", "thank you", "thanks", "thanks for watching",
     "thank you for watching", "thank you very much", "bye", "bye bye",
@@ -37,48 +48,145 @@ _NOISE_HALLUCINATIONS = {
 }
 
 
+def _resolve_alsa_device():
+    """Pick an ALSA capture device for arecord.
+
+    The bare ALSA ``default`` device is frequently absent on a headless Pi
+    (no card 0 capture), so ``arecord`` exits instantly with "audio open
+    error: No such file or directory" and the recorder appears to "stop
+    unexpectedly". So: honour an explicit ``CHIBI_MIC_DEVICE`` override;
+    otherwise probe ``arecord -l`` and address the first capture card by
+    NAME. The USB index (``hw:3``) drifts across reboots/replugs, but
+    ``plughw:CARD=<name>`` is stable and also converts to s16le @ RATE if the
+    mic can't deliver that natively. Returns None to fall back to ``default``.
+    """
+    override = os.environ.get("CHIBI_MIC_DEVICE")
+    if override:
+        return override
+    try:
+        out = subprocess.run(
+            ["arecord", "-l"], capture_output=True, text=True, timeout=5
+        ).stdout
+    except Exception:
+        return None
+    m = re.search(r"^card \d+: (\S+)", out, re.MULTILINE)
+    if m:
+        return f"plughw:CARD={m.group(1)},DEV=0"
+    return None
+
+
+def _build_capture_cmd():
+    """
+    Return (argv, name) for a raw-PCM recorder, preferring arecord (ALSA),
+    falling back to pw-record (PipeWire). Returns (None, None) if neither
+    is installed.
+    """
+    if shutil.which("arecord"):
+        cmd = [
+            "arecord", "-q",
+            "-f", "S16_LE",
+            "-r", str(RATE),
+            "-c", str(CHANNELS),
+            "-t", "raw",
+        ]
+        device = _resolve_alsa_device()
+        if device:
+            cmd += ["-D", device]
+        cmd.append("-")
+        return (cmd, f"arecord ({device or 'default'})")
+    if shutil.which("pw-record"):
+        return ([
+            "pw-record",
+            "--rate", str(RATE),
+            "--channels", str(CHANNELS),
+            "--format", "s16",
+            "--raw",
+            "-",
+        ], "pw-record")
+    return (None, None)
+
+
 class VoiceInput:
     def __init__(self, model_size="tiny", device="cpu", compute_type="int8",
                  silence_threshold=SILENCE_THRESHOLD,
-                 min_speech_duration=MIN_SPEECH_DURATION):
+                 min_speech_duration=MIN_SPEECH_DURATION,
+                 oww_enabled=False, oww_model="", oww_threshold=0.5,
+                 model_dir=""):
+        """
+        model_size: "tiny", "base", "small" — tiny recommended for Pi 4
+        model_dir: path to an already-converted faster-whisper model directory.
+            When set, it is loaded directly instead of `model_size` — which is
+            what makes offline startup possible: a bare model NAME sends
+            faster-whisper to HuggingFace to download ~75MB on first run, so a
+            freshly installed machine with no network would come up deaf. The
+            SynapseOS package ships the model and points this at it.
+        device: "cpu" for Pi
+        compute_type: "int8" for Pi (fastest), "float32" for accuracy
+        silence_threshold: mean-amplitude floor to start recording. Higher =
+            less sensitive (keeps the TV / room noise from triggering).
+        min_speech_duration: drop captures shorter than this (seconds).
+        oww_*: optional openWakeWord engine — a detection sets wake_detected
+            (polled by the app), which opens the conversation window exactly
+            like saying the transcription wake word. Degrades to disabled if
+            the package/model isn't available.
+        """
         self.model_size = model_size
+        self.model_dir = model_dir
         self.device = device
         self.compute_type = compute_type
         self.silence_threshold = silence_threshold
         self.min_speech_duration = min_speech_duration
         self.model = None
+        self._proc = None
+
+        # Optional wake-word engine (experimental; config oww_enabled)
+        self._oww = None
+        self._oww_threshold = oww_threshold
+        self.wake_detected = False
+        if oww_enabled:
+            self._init_oww(oww_model)
 
         self.is_listening = False
         self.is_recording = False
         # When muted (set by the app while Chibi is speaking), the listen loop
-        # skips capture and clears the queue — the half-duplex guard that stops
-        # Chibi's own TTS from being transcribed and fed back as input.
+        # keeps reading the recorder so its pipe doesn't back up, but discards
+        # the audio and clears the queue — this is the half-duplex guard that
+        # stops Chibi's own TTS from being transcribed and fed back as input.
         self.muted = False
         self.result_queue = queue.Queue()
-
-        self._sd = None
-        self._mic_device = None
-        self._mic_rate = None
-        self._mic_channels = 1
-        self._audio_queue = queue.Queue()
+        # Throttle the "capture unavailable" log when the mic is missing
+        # (e.g. USB camera unplugged) so it doesn't flood the log file.
+        self._last_capture_err_log = 0.0
 
         self._ready = False
         self._load_thread = threading.Thread(target=self._load_model, daemon=True)
         self._load_thread.start()
 
     def _load_model(self):
+        """Load Whisper model in background."""
         try:
             from faster_whisper import WhisperModel
-            print(f"[Voice] Loading Whisper {self.model_size} model...")
+            # A local directory is loaded as-is; a bare size name makes
+            # faster-whisper fetch it from HuggingFace on first run.
+            if self.model_dir and os.path.isdir(self.model_dir):
+                target = self.model_dir
+                print(f"[Voice] Loading Whisper from {target} (offline)...")
+            else:
+                if self.model_dir:
+                    print(f"[Voice] stt_model_dir {self.model_dir!r} not found — "
+                          "falling back to download")
+                target = self.model_size
+                print(f"[Voice] Loading Whisper {target} model...")
             self.model = WhisperModel(
-                self.model_size,
+                target,
                 device=self.device,
                 compute_type=self.compute_type,
             )
             print("[Voice] Whisper model loaded!")
             self._ready = True
         except ImportError:
-            print("[Voice] faster-whisper not installed! Run: pip install faster-whisper")
+            print("[Voice] faster-whisper not installed!")
+            print("[Voice] Run: pip install faster-whisper --break-system-packages")
         except Exception as e:
             print(f"[Voice] Failed to load model: {e}")
 
@@ -86,150 +194,147 @@ class VoiceInput:
     def ready(self) -> bool:
         return self._ready
 
-    def _init_audio(self):
-        """Find a working mic using callback-based streams."""
-        if self._sd is not None:
-            return self._mic_device is not None
-
+    def _init_oww(self, model_path: str):
+        """Load openWakeWord if installed; any failure just disables it."""
         try:
-            import sounddevice as sd
-            self._sd = sd
-        except ImportError:
-            print("[Voice] sounddevice not installed! Run: pip install sounddevice")
-            return False
+            from openwakeword.model import Model
+            kwargs = {"wakeword_models": [model_path]} if model_path else {}
+            self._oww = Model(**kwargs)
+            print(f"[Voice] openWakeWord active "
+                  f"({model_path or 'bundled models'})")
+        except Exception as e:
+            print(f"[Voice] openWakeWord unavailable ({e}); "
+                  f"using the transcription wake word only.")
+            self._oww = None
 
-        devices = sd.query_devices()
-        apis = sd.query_hostapis()
-
-        # Log what we see
-        print(f"[Voice] {len(devices)} audio devices across {len(apis)} host APIs")
-
-        # Build list of input devices with API info
-        input_devs = []
-        for i, dev in enumerate(devices):
-            if dev['max_input_channels'] > 0:
-                api_name = apis[dev['hostapi']]['name']
-                input_devs.append({
-                    'index': i,
-                    'name': dev['name'],
-                    'api': api_name,
-                    'rate': int(dev['default_samplerate']),
-                    'channels': dev['max_input_channels'],
-                })
-                print(f"[Voice]   [{i}] {dev['name']} | {api_name} | "
-                      f"{dev['max_input_channels']}ch {int(dev['default_samplerate'])}Hz")
-
-        if not input_devs:
-            print("[Voice] No input devices!")
-            return False
-
-        # Sort by API reliability: DirectSound > MME > WASAPI > WDM-KS
-        api_rank = {
-            'Windows DirectSound': 0,
-            'MME': 1,
-            'Core Audio': 0,     # macOS
-            'ALSA': 0,           # Linux
-            'Windows WASAPI': 2,
-            'Windows WDM-KS': 3,
-        }
-        input_devs.sort(key=lambda d: api_rank.get(d['api'], 5))
-
-        # Test each with callback stream
-        for dev in input_devs:
-            idx = dev['index']
-            name = dev['name']
-            api = dev['api']
-            native_rate = dev['rate']
-            max_ch = dev['channels']
-
-            rates = list(dict.fromkeys([native_rate, 48000, 44100, 16000, 22050]))
-            channels_list = [1, 2] if max_ch >= 2 else [max_ch]
-
-            for ch in channels_list:
-                for rate in rates:
-                    ok = self._test_callback_stream(idx, rate, ch)
-                    if ok:
-                        self._mic_device = idx
-                        self._mic_rate = rate
-                        self._mic_channels = ch
-                        print(f"[Voice] ✓ Mic: [{idx}] {name} ({rate}Hz {ch}ch {api})")
-                        return True
-                    # Don't print every failure — just the first per device
-            print(f"[Voice]   ✗ [{idx}] {name} — no working config")
-
-        print("[Voice] ⚠ No working mic found!")
+    def consume_wake_detection(self) -> bool:
+        """True once per wake-word detection (cleared on read)."""
+        if self.wake_detected:
+            self.wake_detected = False
+            return True
         return False
 
-    def _test_callback_stream(self, device, samplerate, channels):
-        """Test if a device works by opening a callback stream and reading data."""
-        import sounddevice as sd
-
-        got_data = threading.Event()
-
-        def callback(indata, frames, time_info, status):
-            got_data.set()
-            raise sd.CallbackStop()
-
+    def _feed_oww(self, chunk: np.ndarray):
+        """Run the wake-word model on a PCM chunk; sets wake_detected on a hit."""
         try:
-            stream = sd.InputStream(
-                device=device,
-                samplerate=samplerate,
-                channels=channels,
-                dtype='int16',
-                blocksize=1024,
-                callback=callback,
-            )
-            stream.start()
-            success = got_data.wait(timeout=2)
-            stream.stop()
-            stream.close()
-            return success
-        except Exception:
-            return False
+            scores = self._oww.predict(chunk)
+            if scores and max(scores.values()) >= self._oww_threshold:
+                self.wake_detected = True
+                self._oww.reset()
+        except Exception as e:
+            print(f"[Voice] openWakeWord error ({e}); disabling engine.")
+            self._oww = None
 
-    # ─── Listening ──────────────────────────────────────────────────────
+    def _open_stream(self):
+        """Start the recorder subprocess streaming raw s16le PCM to stdout."""
+        cmd, name = _build_capture_cmd()
+        if cmd is None:
+            raise RuntimeError(
+                "no audio recorder found — install alsa-utils (arecord) "
+                "or pipewire (pw-record)"
+            )
+        print(f"[Voice] Capturing audio via {name}")
+        self._proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+
+    def _close_stream(self):
+        if self._proc is not None:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+
+    def _read_chunk(self) -> np.ndarray | None:
+        """Read exactly CHUNK samples of int16 PCM, or None on EOF/death."""
+        want = CHUNK * _BYTES_PER_SAMPLE
+        buf = b""
+        while len(buf) < want:
+            part = self._proc.stdout.read(want - len(buf))
+            if not part:
+                return None  # recorder exited / EOF
+            buf += part
+        return np.frombuffer(buf, dtype=np.int16)
 
     def start_listening(self):
+        """Start the voice listening loop in a background thread."""
         if not self._ready:
+            print("[Voice] Model not ready yet, waiting...")
             self._load_thread.join(timeout=30)
             if not self._ready:
-                print("[Voice] Model failed to load.")
+                print("[Voice] Model failed to load, voice input disabled.")
                 return
+
         self.is_listening = True
         thread = threading.Thread(target=self._listen_loop, daemon=True)
         thread.start()
 
     def stop_listening(self):
+        """Stop listening."""
         self.is_listening = False
 
     def get_transcription(self) -> str | None:
+        """Non-blocking: returns transcribed text or None."""
         try:
             return self.result_queue.get_nowait()
         except queue.Empty:
             return None
 
     def _listen_loop(self):
-        if not self._init_audio():
-            print("[Voice] Voice disabled — text only mode.")
+        """Continuous listening loop with voice activity detection."""
+        try:
+            self._open_stream()
+        except Exception as e:
+            print(f"[Voice] Could not start audio capture: {e}")
             self.is_listening = False
             return
 
-        while self.is_listening:
-            try:
-                if self.muted:
-                    # Chibi is speaking: don't capture (so its TTS isn't
-                    # transcribed and looped back) and clear anything queued.
-                    self._drain_queue()
-                    time.sleep(0.05)
-                    continue
-                audio_data = self._record_speech()
-                if audio_data is not None and not self.muted:
-                    text = self._transcribe(audio_data)
-                    if text and text.strip() and not self.muted:
-                        self.result_queue.put(text.strip())
-            except Exception as e:
-                print(f"[Voice] Error: {e}")
-                time.sleep(1)
+        try:
+            while self.is_listening:
+                try:
+                    if self.muted:
+                        # Chibi is speaking: keep the recorder drained so its
+                        # pipe doesn't back up, but throw the audio away and
+                        # clear anything already queued, so its TTS is never
+                        # transcribed and looped back as fake input.
+                        if self._read_chunk() is None:
+                            raise RuntimeError("audio recorder stopped unexpectedly")
+                        self._drain_queue()
+                        continue
+                    audio_data = self._record_speech()
+                    if audio_data is not None and not self.muted:
+                        text = self._transcribe(audio_data)
+                        if text and text.strip() and not self.muted:
+                            self.result_queue.put(text.strip())
+                except Exception as e:
+                    # The recorder subprocess died — usually the USB mic was
+                    # unplugged / never enumerated (arecord falls back to a
+                    # non-existent "default" and exits instantly). Tear the dead
+                    # process down and REOPEN the stream so capture self-heals
+                    # when the device comes back, instead of spinning forever on
+                    # a corpse. Log is throttled to once / 30s so a missing mic
+                    # doesn't flood chibi.log.
+                    self._close_stream()
+                    now = time.time()
+                    if now - self._last_capture_err_log > 30:
+                        print(f"[Voice] Audio capture unavailable ({e}); "
+                              f"is the mic plugged in? Retrying until it returns.")
+                        self._last_capture_err_log = now
+                    time.sleep(3)
+                    try:
+                        self._open_stream()
+                    except Exception:
+                        pass  # still gone; back off and retry on the next pass
+        finally:
+            self._close_stream()
 
     def _drain_queue(self):
         """Discard any pending transcriptions."""
@@ -239,137 +344,97 @@ class VoiceInput:
         except queue.Empty:
             pass
 
-    # ─── Recording with callback stream ─────────────────────────────────
-
     def _record_speech(self) -> np.ndarray | None:
-        """Record using a callback-based stream — no blocking API."""
-        import sounddevice as sd
-
-        chunk_ms = 64
-        chunk_samples = max(512, int(self._mic_rate * chunk_ms / 1000))
-        silence_chunks = int(SILENCE_DURATION * 1000 / chunk_ms)
-        min_speech = int(self.min_speech_duration * 1000 / chunk_ms)
-        max_speech = int(MAX_SPEECH_DURATION * 1000 / chunk_ms)
-
-        # Clear audio queue
-        while not self._audio_queue.empty():
-            try:
-                self._audio_queue.get_nowait()
-            except queue.Empty:
-                break
-
-        # Callback pushes chunks into queue
-        def audio_callback(indata, frames, time_info, status):
-            self._audio_queue.put(indata.copy())
-
-        try:
-            stream = sd.InputStream(
-                device=self._mic_device,
-                samplerate=self._mic_rate,
-                channels=self._mic_channels,
-                dtype='int16',
-                blocksize=chunk_samples,
-                callback=audio_callback,
-            )
-            stream.start()
-        except Exception as e:
-            print(f"[Voice] Stream open failed: {e}")
-            time.sleep(1)
-            return None
-
+        """
+        Record audio with voice activity detection from the recorder stream.
+        Returns numpy array of audio data, or None if no speech detected.
+        """
         frames = []
-        silent_count = 0
-        speech_count = 0
+        silent_chunks = 0
+        speech_chunks = 0
+        silence_limit = int(SILENCE_DURATION * RATE / CHUNK)
+        min_speech_chunks = int(self.min_speech_duration * RATE / CHUNK)
+        max_chunks = int(MAX_SPEECH_DURATION * RATE / CHUNK)
         recording = False
 
         try:
             while self.is_listening and not self.muted:
-                try:
-                    data = self._audio_queue.get(timeout=0.5)
-                except queue.Empty:
-                    continue
-
-                # Mix to mono
-                if self._mic_channels > 1:
-                    audio = data.mean(axis=1).astype(np.int16)
-                else:
-                    audio = data.flatten()
-
-                amplitude = np.abs(audio).mean()
+                audio_array = self._read_chunk()
+                if audio_array is None:
+                    # recorder died; surface as error so the loop can restart it
+                    raise RuntimeError("audio recorder stopped unexpectedly")
+                # Wake-word engine sees every (unmuted) chunk, whether or not
+                # VAD is currently recording.
+                if self._oww is not None:
+                    self._feed_oww(audio_array)
+                amplitude = np.abs(audio_array.astype(np.int32)).mean()
 
                 if amplitude > self.silence_threshold:
                     if not recording:
                         recording = True
                         self.is_recording = True
-                    silent_count = 0
-                    speech_count += 1
-                    frames.append(audio)
+                    silent_chunks = 0
+                    speech_chunks += 1
+                    frames.append(audio_array.copy())
                 elif recording:
-                    silent_count += 1
-                    frames.append(audio)
-                    if silent_count > silence_chunks:
+                    silent_chunks += 1
+                    frames.append(audio_array.copy())
+
+                    if silent_chunks > silence_limit:
+                        # End of speech
                         break
 
-                if recording and speech_count > max_speech:
+                if recording and speech_chunks > max_chunks:
                     break
-
-                if not recording:
-                    time.sleep(0.003)
         finally:
-            stream.stop()
-            stream.close()
             self.is_recording = False
 
-        if speech_count < min_speech:
+        if speech_chunks < min_speech_chunks:
             return None
 
+        # Convert to numpy float32 array for Whisper
         audio_np = np.concatenate(frames).astype(np.float32) / 32768.0
-
-        # Resample to 16kHz for Whisper
-        if self._mic_rate != TARGET_RATE:
-            duration = len(audio_np) / self._mic_rate
-            target_len = int(duration * TARGET_RATE)
-            if target_len > 0 and len(audio_np) > 0:
-                indices = np.linspace(0, len(audio_np) - 1, target_len)
-                audio_np = np.interp(
-                    indices, np.arange(len(audio_np)), audio_np
-                ).astype(np.float32)
-
         return audio_np
 
-    # ─── Transcription ──────────────────────────────────────────────────
-
     def _transcribe(self, audio_data: np.ndarray) -> str:
+        """Transcribe audio data using Whisper."""
         if self.model is None:
             return ""
+
         try:
             segments, info = self.model.transcribe(
                 audio_data,
-                beam_size=1,
-                language="en",
-                vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500),
+                beam_size=1,            # Fastest
+                language="en",          # Set to None for auto-detect
+                vad_filter=True,        # Filter out non-speech
+                vad_parameters=dict(
+                    min_silence_duration_ms=500,
+                ),
                 condition_on_previous_text=False,  # don't let prior text seed loops
             )
-            # Keep only confident, speech-like segments — Whisper-tiny emits a
-            # high no_speech_prob / very low avg_logprob when "transcribing"
-            # noise; drop those instead of forwarding a hallucinated phrase.
-            kept = []
-            for seg in segments:
-                if getattr(seg, "no_speech_prob", 0.0) > 0.6:
-                    continue
-                if getattr(seg, "avg_logprob", 0.0) < -1.0:
-                    continue
-                kept.append(seg.text)
-            text = " ".join(kept).strip()
+
+            text = " ".join(seg.text for seg in segments).strip()
+
+            # Drop bare known-hallucination phrases (normalized: lowercase,
+            # punctuation stripped). Real multi-word speech is untouched.
+            #
+            # NOTE: we deliberately do NOT gate on per-segment avg_logprob /
+            # no_speech_prob. On a marginal mic (the PS3 Eye) those run low for
+            # genuine speech too, which silently ate real input — "records but
+            # never activates". Whisper's own vad_filter plus this phrase list
+            # are enough to suppress the common noise hallucinations.
             norm = re.sub(r"[^a-z' ]", "", text.lower()).strip()
             norm = re.sub(r"\s+", " ", norm)
             if norm in _NOISE_HALLUCINATIONS:
                 return ""
+
             return text
+
         except Exception as e:
             print(f"[Voice] Transcription error: {e}")
             return ""
 
     def cleanup(self):
+        """Clean up audio resources."""
         self.is_listening = False
+        self._close_stream()
