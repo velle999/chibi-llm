@@ -271,13 +271,14 @@ class AlarmManager:
         self._lock = threading.Lock()
 
         # Wake-up messages Chibi cycles through
+        name = getattr(config, "user_name", "friend")
         self.wake_messages = [
-            "Good morning Velle! Time to wake up!",
+            f"Good morning {name}! Time to wake up!",
             "Rise and shine! It's a new day!",
-            "Wakey wakey Velle! Come on, you got this!",
+            f"Wakey wakey {name}! Come on, you got this!",
             "Hey sleepyhead! Time to get up!",
             "Good morning! The world is waiting for you!",
-            "Velle! It's morning time! Up up up!",
+            f"{name}! It's morning time! Up up up!",
             "Rise and shine sunshine! Let's go!",
         ]
         self._wake_msg_index = 0

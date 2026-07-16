@@ -87,7 +87,7 @@ class ThothCorpus:
             for tradition, note in entry.get("correspondences", {}).items():
                 lines.append(f"  · {tradition}: {note}")
         lines.append(
-            "Offer only what genuinely resonates with what Velle described. "
+            "Offer only what genuinely resonates with what the user described. "
             "Present these as parallels; do not assert what they mean."
         )
         return "\n".join(lines)

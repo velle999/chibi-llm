@@ -586,6 +586,9 @@ class CalendarMonitor:
 class Soul:
     def __init__(self, config):
         self.config = config
+        # Who the avatar addresses — follows config (config.local.py / env) so a
+        # fresh install greets the configured user, not a hardcoded name.
+        self.user_name = getattr(config, "user_name", "friend")
         self.state = SoulState()
         self._impulse_queue = []
         self._lock = threading.Lock()
@@ -782,7 +785,7 @@ class Soul:
             if new_condition in ("storm", "thunderstorm"):
                 self.state.excitement = min(1.0, self.state.excitement + 0.4)
                 self._queue_impulse(random.choice([
-                    "Whoa, there's a storm rolling in! Stay safe, Velle!",
+                    f"Whoa, there's a storm rolling in! Stay safe, {self.user_name}!",
                     "Storm alert! Perfect weather to stay inside and code.",
                 ]))
             elif new_condition == "snow" and old_condition != "snow":
@@ -831,17 +834,17 @@ class Soul:
 
             # Relationship depth
             if s.total_days_known > 30:
-                parts.append(f"Known Velle for {s.total_days_known} days. Good friends.")
+                parts.append(f"Known {self.user_name} for {s.total_days_known} days. Good friends.")
             elif s.total_days_known > 7:
-                parts.append(f"Known Velle for {s.total_days_known} days. Getting to know each other.")
+                parts.append(f"Known {self.user_name} for {s.total_days_known} days. Getting to know each other.")
             elif s.total_days_known > 0:
-                parts.append(f"Met Velle {s.total_days_known} day(s) ago. Still new!")
+                parts.append(f"Met {self.user_name} {s.total_days_known} day(s) ago. Still new!")
 
             if s.current_streak_days > 3:
                 parts.append(f"Chatting streak: {s.current_streak_days} days!")
 
             if s.loneliness > 0.5:
-                parts.append("Has been alone for a while, happy to see Velle.")
+                parts.append(f"Has been alone for a while, happy to see {self.user_name}.")
             if s.excitement > 0.5:
                 parts.append("Feeling excited about something.")
 
@@ -862,9 +865,9 @@ class Soul:
                 # If last interaction was recent (within 2 hours), they're probably up early
                 silence_now = time.time() - s.last_interaction
                 if hour >= 4 or silence_now < 7200:
-                    parts.append("Early morning — Velle is up early.")
+                    parts.append(f"Early morning — {self.user_name} is up early.")
                 else:
-                    parts.append("Very late — Velle is still up.")
+                    parts.append(f"Very late — {self.user_name} is still up.")
             elif hour < 9:
                 parts.append("Morning — waking up energy.")
             elif hour < 12:
@@ -878,7 +881,7 @@ class Soul:
             elif hour < 23:
                 parts.append("Night — chill mode.")
             else:
-                parts.append("Late night — keeping Velle company.")
+                parts.append(f"Late night — keeping {self.user_name} company.")
 
             # System context (keep in mood for subtle awareness)
             sys_ctx = self.system_monitor.get_context()
@@ -908,7 +911,7 @@ class Soul:
 
         checks = [
             ("first_chat", s.total_interactions >= 1,
-             "This is our very first conversation! Nice to meet you, Velle!"),
+             f"This is our very first conversation! Nice to meet you, {self.user_name}!"),
             ("10_chats", s.total_interactions >= 10,
              "We've had 10 conversations now! I feel like I'm getting to know you."),
             ("50_chats", s.total_interactions >= 50,
@@ -916,7 +919,7 @@ class Soul:
             ("100_chats", s.total_interactions >= 100,
              "100 conversations together... that's actually kind of amazing."),
             ("500_chats", s.total_interactions >= 500,
-             "500 chats. Velle, you're genuinely my favorite person. Well, my only person. But still."),
+             f"500 chats. {self.user_name}, you're genuinely my favorite person. Well, my only person. But still."),
             ("week_together", s.total_days_known >= 7,
              "It's been a whole week since we met! Time flies."),
             ("month_together", s.total_days_known >= 30,
@@ -1099,9 +1102,9 @@ class Soul:
             self._greeted_today = True
             streak = s.current_streak_days
             if streak > 7:
-                return f"Good morning, Velle! Day {streak} of our streak! Let's go!"
+                return f"Good morning, {self.user_name}! Day {streak} of our streak! Let's go!"
             return random.choice([
-                "Good morning, Velle! How'd you sleep?",
+                f"Good morning, {self.user_name}! How'd you sleep?",
                 "Morning! Ready for a new day?",
                 f"Morning! It's {datetime.now().strftime('%A')} — let's make it good.",
             ])
