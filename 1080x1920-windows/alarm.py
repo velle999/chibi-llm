@@ -283,7 +283,15 @@ class AlarmManager:
         ]
         self._wake_msg_index = 0
 
+        # mtime of ALARM_FILE as we last saw it, so _reload_if_changed() can
+        # tell someone else's write (synsh) from our own _save().
+        self._file_mtime = 0.0
+
         self._load()
+        try:
+            self._file_mtime = os.path.getmtime(ALARM_FILE)
+        except OSError:
+            pass
 
         # Start alarm checker thread
         self._running = True
@@ -317,6 +325,9 @@ class AlarmManager:
             with open(tmp, "w") as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp, ALARM_FILE)
+            # Record it, or _reload_if_changed() sees our own write as an
+            # external one and reloads the file every second, forever.
+            self._file_mtime = os.path.getmtime(ALARM_FILE)
         except Exception as e:
             print(f"[Alarm] Save error: {e}")
 
@@ -384,10 +395,33 @@ class AlarmManager:
         self._wake_msg_index += 1
         return msg
 
+    def _reload_if_changed(self):
+        """Pick up alarms set by someone else — synsh writes this same file.
+
+        _load() only ran at startup, so `set alarm for 7:30am` in synsh went
+        into ~/.chibi-alarms.json and was never seen by a Chibi that was already
+        running: the alarm simply never rang.
+
+        Our own _save() bumps the mtime too, so record it there as well —
+        otherwise every save looks like an external change and we reload our own
+        file once a second forever.
+        """
+        try:
+            mtime = os.path.getmtime(ALARM_FILE)
+        except OSError:
+            return
+        if mtime == self._file_mtime:
+            return
+        self._file_mtime = mtime
+        with self._lock:
+            self._load()
+        print("[Alarm] reloaded — alarms changed on disk")
+
     def _check_loop(self):
         """Background thread checking if any alarm should fire."""
         while self._running:
             try:
+                self._reload_if_changed()
                 now = datetime.now()
 
                 with self._lock:
