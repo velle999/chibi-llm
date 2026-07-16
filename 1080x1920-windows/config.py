@@ -32,9 +32,21 @@ class Config:
     llm_model: str = "mistral"        # Model name in Ollama
     llm_backend: str = "ollama"       # "ollama", "llamacpp", or "synapd"
     # When llm_backend == "synapd", chibi talks to SynapseOS's kernel-native AI
-    # daemon over this unix socket instead of an HTTP model server — so the OS's
-    # own brain speaks through chibi. (host/port above are ignored in that mode.)
+    # daemon instead of an HTTP model server — so the OS's own brain speaks
+    # through chibi. (llm_host/llm_port above are ignored in that mode.)
+    #
+    # On the SynapseOS box itself, leave synapd_host empty and it uses the unix
+    # socket. From another machine (e.g. the Pi), set synapd_host in
+    # config.local.py to the SynapseOS host, which must be running
+    # synapd-bridge.socket — that fronts the unix socket on tcp/11435.
+    #
+    # These MUST be declared here even though they are per-machine: the
+    # config.local.py loader below only applies keys that already exist on
+    # Config (`hasattr` gate), so an override of a field that is not declared
+    # is silently dropped.
     synapd_socket: str = "/run/synapd/synapd.sock"
+    synapd_host: str = ""             # "" = local unix socket (override in config.local.py)
+    synapd_port: int = 11435          # synapd-bridge.socket
     llm_system_prompt: str = (
         "Your name is Chibi. You are {user_name}'s personal AI companion. "
         "You have a cute chibi cat-eared avatar on a cyberpunk Raspberry Pi display. "

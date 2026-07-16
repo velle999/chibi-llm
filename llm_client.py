@@ -5,9 +5,17 @@ Supports streaming responses for real-time avatar reactions.
 Backends (config.llm_backend):
   "ollama"    — Ollama HTTP server (default)
   "llamacpp"  — llama.cpp HTTP /completion server
-  "synapd"    — SynapseOS's kernel-native AI daemon over its unix socket.
-                Lets chibi "talk through" the OS's own synapd brain instead
-                of a separate model server. Optional — only used when set.
+  "synapd"    — SynapseOS's kernel-native AI daemon. Reached over its unix
+                socket when chibi runs on the SynapseOS box itself, or over TCP
+                (config.synapd_host/synapd_port) when it runs somewhere else,
+                e.g. the Pi. Lets chibi "talk through" the OS's own synapd brain
+                instead of a separate model server. Optional — only used when set.
+
+                The TCP path expects synapd-bridge.socket on the SynapseOS host,
+                which fronts the unix socket on 11435. synapd's protocol has no
+                authentication, so that port is pinned to one source IP by
+                /etc/nftables.d/synapd-bridge.nft — point this at a host you
+                control, never at an untrusted network.
 """
 
 import json
@@ -55,13 +63,45 @@ class LLMClient:
     def synapd_socket(self) -> str:
         return getattr(self.config, "synapd_socket", "/run/synapd/synapd.sock")
 
+    @property
+    def synapd_host(self) -> str:
+        """Empty means local: use the unix socket. Set it to reach the bridge."""
+        return getattr(self.config, "synapd_host", "") or ""
+
+    @property
+    def synapd_port(self) -> int:
+        return int(getattr(self.config, "synapd_port", 11435))
+
+    @property
+    def synapd_target(self) -> str:
+        """How we describe the endpoint in errors, so a failure says which of
+        the two transports it was actually trying."""
+        if self.synapd_host:
+            return f"{self.synapd_host}:{self.synapd_port}"
+        return self.synapd_socket
+
+    def _synapd_connect(self, timeout: float):
+        """Connect to synapd over TCP if a host is configured, else the unix
+        socket. Both transports carry the identical binary protocol — the bridge
+        is a byte proxy, not a translator — so every caller can share this."""
+        if self.synapd_host:
+            sock = socket.create_connection(
+                (self.synapd_host, self.synapd_port), timeout=timeout)
+            # The reply can be seconds of generation; don't let Nagle sit on the
+            # request half of a single small write.
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        else:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect(self.synapd_socket)
+        return sock
+
     def _check_connection(self):
         try:
             if self.config.llm_backend == "synapd":
-                # A successful connect to the unix socket is enough of a ping.
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                    s.settimeout(5)
-                    s.connect(self.synapd_socket)
+                # A successful connect is enough of a ping.
+                with self._synapd_connect(5):
+                    pass
                 self.connected = True
                 return
             url = self.base_url
@@ -91,16 +131,25 @@ class LLMClient:
         if num_predict is None:
             num_predict = getattr(self.config, "llm_num_predict", 110)
 
-        if self.config.llm_backend == "synapd":
+        # Dispatch explicitly. A bare `else: llamacpp` used to catch unknown
+        # backends too, so a typo — or a config that names a backend this copy
+        # of the file has not got — silently spoke llama.cpp's protocol at
+        # whatever was listening, instead of saying so. Fail loudly.
+        backend = self.config.llm_backend
+        if backend == "synapd":
             yield from self._stream_synapd(messages, extra_system, num_predict)
-        elif self.config.llm_backend == "ollama":
+        elif backend == "ollama":
             yield from self._stream_ollama(messages, extra_system, num_predict)
-        else:
+        elif backend == "llamacpp":
             yield from self._stream_llamacpp(messages, extra_system, num_predict)
+        else:
+            raise ValueError(
+                f"llm_backend={backend!r} is not one of "
+                "'ollama', 'llamacpp', 'synapd'")
 
     def _stream_synapd(self, messages: list[dict], extra_system: str = "",
                        num_predict: int = 110):
-        """Query SynapseOS's synapd over its unix socket.
+        """Query SynapseOS's synapd over its unix socket, or the TCP bridge.
 
         synapd is a single-shot request/response daemon (no token streaming),
         so we send one QUERY and yield the reply in word-sized chunks — enough
@@ -125,9 +174,7 @@ class LLMClient:
 
         sock = None
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.settimeout(120)
-            sock.connect(self.synapd_socket)
+            sock = self._synapd_connect(120)
             sock.sendall(header + payload)
             self.connected = True
 
@@ -151,7 +198,7 @@ class LLMClient:
 
         except (ConnectionError, OSError) as e:
             self.connected = False
-            raise ConnectionError(f"Cannot reach synapd at {self.synapd_socket}: {e}")
+            raise ConnectionError(f"Cannot reach synapd at {self.synapd_target}: {e}")
         finally:
             if sock:
                 try:
@@ -161,8 +208,9 @@ class LLMClient:
 
     @staticmethod
     def _recv_exact(sock, n: int) -> bytes:
-        """Read exactly n bytes or raise — MSG_WAITALL isn't guaranteed on
-        every unix-socket read, so loop until satisfied."""
+        """Read exactly n bytes or raise — a recv can always come up short, and
+        over TCP it routinely does once a reply spans segments, so loop until
+        satisfied."""
         buf = bytearray()
         while len(buf) < n:
             chunk = sock.recv(n - len(buf))
