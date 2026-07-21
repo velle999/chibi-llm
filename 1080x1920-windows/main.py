@@ -393,6 +393,13 @@ class ChibiAvatarApp:
         # while now < _wake_until (opened by naming Chibi or by any typed/real
         # exchange). 0 = closed, so the very first voice line must say the name.
         self._wake_until = 0.0
+        # Consecutive voice lines accepted *only* because the window was open
+        # (never naming her). The window re-opens on every accepted exchange, so
+        # without a cap one Whisper mishear of the TV starts a conversation that
+        # sustains itself forever — each reply renews her permission to listen.
+        # Reset by anything that really addresses her: her name, the wake word,
+        # typed input, or a fresh impulse of her own.
+        self._unaddressed_streak = 0
 
         # Components
         self.renderer = ChibiRenderer(self.config)
@@ -988,10 +995,30 @@ class ChibiAvatarApp:
         """
         if self.alarm.is_ringing:
             return True  # any voice dismisses a ringing alarm (handled downstream)
-        if time.time() < self._wake_until:
+        if self._voice_names_chibi(text):
+            # Explicitly addressed — a real conversation is on. Window-only
+            # accepts start counting from zero again.
+            self._unaddressed_streak = 0
             return True
         if self.horus_mode or self.security_mode:
             return True
+        if time.time() < self._wake_until:
+            # Window-only accept. The window re-opens on every exchange, so cap
+            # how long a chain of these can run without her name coming up —
+            # a human names her now and then; the TV never does.
+            cap = getattr(self.config, "wake_window_max_unaddressed", 4)
+            if cap and self._unaddressed_streak >= cap:
+                self._wake_until = 0.0
+                self._unaddressed_streak = 0
+                print("[Voice] Conversation window closed "
+                      f"({cap} turns without being addressed) — say the name again")
+                return False
+            self._unaddressed_streak += 1
+            return True
+        return False
+
+    def _voice_names_chibi(self, text: str) -> bool:
+        """True if the line explicitly names Chibi or says the wake word."""
         # Wake word — configurable (default "computer"). Whisper-tiny can't
         # reliably transcribe "Chibi" (it comes out be/TV/CB/baby), so the spoken
         # trigger is a word the model actually hears. A substring match is safe
@@ -1066,7 +1093,9 @@ class ChibiAvatarApp:
         self.bubble.set_text(impulse)
         if self.voice_out:
             self.voice_out.speak(impulse)
-        # the user can answer without the wake word.
+        # the user can answer without the wake word — so a chain that already
+        # hit the unaddressed cap must not swallow the answer to a fresh prompt.
+        self._unaddressed_streak = 0
         self._open_wake_window()
         self.last_interaction = time.time()
 
@@ -1513,6 +1542,7 @@ class ChibiAvatarApp:
         # wake word had been transcribed.
         if self.voice_in and self.voice_in.consume_wake_detection():
             print("[Voice] Wake word detected (openWakeWord)")
+            self._unaddressed_streak = 0
             self._open_wake_window()
             if self.state == AvatarState.SLEEPING:
                 self.set_state(AvatarState.IDLE)
@@ -1741,6 +1771,9 @@ class ChibiAvatarApp:
 
                 submitted = self.input_box.handle_event(event)
                 if submitted and not self.is_generating:
+                    # Typed input is unmistakably the user — reset the
+                    # window-only voice-accept chain along with sending.
+                    self._unaddressed_streak = 0
                     self.send_message(submitted)
 
             self.update(dt)

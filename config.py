@@ -126,6 +126,13 @@ class Config:
     wake_word: str = "computer"
     wake_window_seconds: float = 22.0        # Window stays open this long after
                                              # each real exchange for follow-ups.
+    # The window re-opens on every accepted exchange, so a conversation can roll
+    # on without naming her — but only this many voice turns in a row. One more
+    # and the line is dropped, the window closes, and she needs the name / wake
+    # word again. A human names her now and then; the TV holding a conversation
+    # with her never does. Anything explicitly addressed (name, wake word, typed
+    # input, answering a fresh impulse) resets the count. 0 = no cap.
+    wake_window_max_unaddressed: int = 4
     # Voice activity detection — mean-amplitude floor to start recording.
     # Tune per room: higher = less sensitive (if the TV across the room keeps
     # triggering the mic, try 800-1200). min_speech drops brief thumps;
