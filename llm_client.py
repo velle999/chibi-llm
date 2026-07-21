@@ -20,6 +20,7 @@ Backends (config.llm_backend):
 
 import json
 import os
+import re
 import socket
 import struct
 import threading
@@ -190,6 +191,8 @@ class LLMClient:
             if msg_type == _SYNAPD_MSG_ERROR:
                 raise ConnectionError(f"synapd error: {text}")
 
+            text = self._truncate_at_turn_break(text)
+
             # Fake streaming: hand back word by word so the UI stays lively.
             words = text.split(" ")
             for i, w in enumerate(words):
@@ -205,6 +208,38 @@ class LLMClient:
                     sock.close()
                 except Exception:
                     pass
+
+    # A new conversational turn beginning inside the reply, in any dialect the
+    # model might resume: chat-template control tokens, or the plain-text
+    # "User:"-style labels the transcript prompt itself uses.
+    _TURN_BREAK = re.compile(
+        r"<\|im_start\|>|<\|im_end\|>|<\|user\|>|<\|assistant\|>|<\|system\|>"
+        r"|</s>|\n\s*(?:user|assistant|system)\s*:",
+        re.IGNORECASE,
+    )
+
+    def _truncate_at_turn_break(self, text: str) -> str:
+        """Cut a synapd reply at the first hallucinated turn marker.
+
+        synapd queries the raw model with a completion-style transcript
+        ("User: ...\\nAssistant:"), and a completion model does not stop at the
+        end of its own turn — it keeps writing the transcript, inventing the
+        user's next line and answering it, alternating until the token budget
+        runs out. On screen that is chibi holding both sides of a conversation
+        with herself; stored whole in the history, it also teaches the model to
+        do it more. Everything from the first sign of a new turn is discarded.
+        The user's name is matched as a turn label too — a model that has seen
+        the name in context happily uses it instead of "User".
+        """
+        m = self._TURN_BREAK.search(text)
+        cut = m.start() if m else len(text)
+        user = getattr(self.config, "user_name", "").strip()
+        if user:
+            nm = re.search(r"\n\s*" + re.escape(user) + r"\s*:", text,
+                           re.IGNORECASE)
+            if nm:
+                cut = min(cut, nm.start())
+        return text[:cut].strip()
 
     @staticmethod
     def _recv_exact(sock, n: int) -> bytes:
