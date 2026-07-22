@@ -369,7 +369,7 @@ class StatusBar:
         surface.blit(server_surf, (w - server_surf.get_width() - 12, 8))
 
         # Controls hint
-        hint = self.font.render("[F1] mic  [ESC] quit", True, (35, 35, 50))
+        hint = self.font.render("[F1] mic  [F11] window  [ESC] quit", True, (35, 35, 50))
         surface.blit(hint, (12, surface.get_height() - 18))
 
 # ─── Main App ────────────────────────────────────────────────────────────────
@@ -1731,6 +1731,72 @@ class ChibiAvatarApp:
                                    (size + 1, size + 1), size)
                 self.screen.blit(snow_surf, (int(wp['x']) - size, int(wp['y']) - size))
 
+    # --- Window controls -------------------------------------------------
+    #
+    # Chibi normally comes up fullscreen, which under a Wayland compositor
+    # means no titlebar and therefore no close button. ESC has always quit,
+    # but nothing on screen said so and there was nothing to click. These draw
+    # a real quit button plus a fullscreen toggle, so the app can be dropped
+    # into a normal window and closed from its titlebar too.
+
+    _WINCTL_SIZE = 26
+    _WINCTL_MARGIN = 10
+
+    def _window_control_rects(self):
+        """Return (close_rect, restore_rect), laid out top-right."""
+        size = self._WINCTL_SIZE
+        m = self._WINCTL_MARGIN
+        w = self.config.window_width
+        close = pygame.Rect(w - m - size, m, size, size)
+        restore = pygame.Rect(close.left - (size + 6), m, size, size)
+        return close, restore
+
+    def _draw_window_controls(self):
+        close_rect, restore_rect = self._window_control_rects()
+        if not hasattr(self, "_winctl_font"):
+            self._winctl_font = pygame.font.SysFont("monospace", 16, bold=True)
+
+        mouse = pygame.mouse.get_pos()
+        for rect, glyph, hot in (
+            (restore_rect, "□", (90, 190, 255)),
+            (close_rect, "×", (255, 80, 110)),
+        ):
+            hovered = rect.collidepoint(mouse)
+            bg = hot if hovered else (28, 28, 40)
+            fg = (10, 10, 16) if hovered else hot
+            pygame.draw.rect(self.screen, bg, rect, border_radius=5)
+            pygame.draw.rect(self.screen, hot, rect, 1, border_radius=5)
+            surf = self._winctl_font.render(glyph, True, fg)
+            self.screen.blit(surf, surf.get_rect(center=rect.center))
+
+    def _toggle_fullscreen(self):
+        """Flip between fullscreen and a normal window.
+
+        Windowed mode gives the compositor something to put a titlebar on, so
+        the usual close button works. We rebuild the surface rather than using
+        pygame.display.toggle_fullscreen(), which is unreliable under SDL's
+        Wayland backend, and re-adopt the resulting size so layout follows.
+        """
+        self.config.fullscreen = not self.config.fullscreen
+        try:
+            self.screen = self._init_display()
+        except pygame.error as e:
+            print(f"[Display] fullscreen toggle failed: {e}")
+            self.config.fullscreen = not self.config.fullscreen
+            return
+        self.config.window_width, self.config.window_height = self.screen.get_size()
+
+    def _handle_window_control_click(self, pos):
+        """Return True if the click was consumed by a window control."""
+        close_rect, restore_rect = self._window_control_rects()
+        if close_rect.collidepoint(pos):
+            self.running = False
+            return True
+        if restore_rect.collidepoint(pos):
+            self._toggle_fullscreen()
+            return True
+        return False
+
     def run(self):
         while self.running:
             dt = self.clock.tick(self.config.target_fps) / 1000.0
@@ -1739,6 +1805,17 @@ class ChibiAvatarApp:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
+                    continue
+
+                # Window controls are drawn above every overlay, so they must
+                # get first refusal on clicks — including while the dream
+                # journal has input captured.
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self._handle_window_control_click(event.pos):
+                        continue
+
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                    self._toggle_fullscreen()
                     continue
 
                 # Dream journal overlay captures all input while open.
@@ -1953,6 +2030,10 @@ class ChibiAvatarApp:
             # Dream journal viewer sits on top of everything else.
             if self.dream_view_open:
                 self._draw_dream_journal()
+
+            # Window controls go above even the dream journal, so there is
+            # always a visible way out.
+            self._draw_window_controls()
 
             pygame.display.flip()
 
