@@ -531,9 +531,20 @@ class ChibiAvatarApp:
         the portrait monitor).
         """
         if not self.config.fullscreen:
-            return pygame.display.set_mode(
-                (self.config.window_width, self.config.window_height)
+            # RESIZABLE because a tiling Wayland compositor (synui) will size
+            # this window to its layout the moment it maps, whatever we ask
+            # for. Without the flag the surface and the window disagree.
+            screen = pygame.display.set_mode(
+                (self.config.window_width, self.config.window_height),
+                pygame.RESIZABLE,
             )
+            # Adopt the real surface size, exactly as the fullscreen path
+            # below does. Skipping this was what left the starfield and the
+            # avatar laid out in an 800x480 box in the top-left corner while
+            # the ticker and input bar — which measure the surface itself —
+            # correctly spanned the whole window.
+            self._adopt_surface_size(screen)
+            return screen
 
         try:
             sizes = pygame.display.get_desktop_sizes()
@@ -563,8 +574,19 @@ class ChibiAvatarApp:
             screen = pygame.display.set_mode(size, pygame.FULLSCREEN)
 
         # Adopt the real surface size so all layout uses the monitor's geometry.
-        self.config.window_width, self.config.window_height = screen.get_size()
+        self._adopt_surface_size(screen)
         return screen
+
+    def _adopt_surface_size(self, screen):
+        """Point config.window_* at the surface we actually got.
+
+        Roughly forty layout sites read config.window_width/height rather than
+        measuring the surface, so these two values ARE the layout. Any time the
+        real surface changes size they have to follow, or everything that reads
+        them draws to the old geometry while everything that measures the
+        surface draws to the new one.
+        """
+        self.config.window_width, self.config.window_height = screen.get_size()
 
     def _extract_memories(self):
         """Ask the LLM to extract memorable facts from recent conversation."""
@@ -1784,7 +1806,7 @@ class ChibiAvatarApp:
             print(f"[Display] fullscreen toggle failed: {e}")
             self.config.fullscreen = not self.config.fullscreen
             return
-        self.config.window_width, self.config.window_height = self.screen.get_size()
+        self._adopt_surface_size(self.screen)
 
     def _handle_window_control_click(self, pos):
         """Return True if the click was consumed by a window control."""
@@ -1805,6 +1827,13 @@ class ChibiAvatarApp:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
+                    continue
+
+                # A tiling compositor resizes us AFTER the window maps, so
+                # adopting the size once in _init_display is not enough — the
+                # configure that matters arrives here, a frame or two later.
+                if event.type == pygame.VIDEORESIZE:
+                    self._adopt_surface_size(pygame.display.get_surface())
                     continue
 
                 # Window controls are drawn above every overlay, so they must
