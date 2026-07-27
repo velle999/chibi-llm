@@ -407,6 +407,24 @@ class Config:
             if val:
                 setattr(self, attr, val)
 
+        # 2b. Boolean overrides need their own pass. The loop above assigns the
+        #     raw string, and every non-empty string is truthy — so putting
+        #     CHIBI_FULLSCREEN there would make CHIBI_FULLSCREEN=0 *enable*
+        #     fullscreen. Accept the usual falsey spellings instead.
+        #
+        #     fullscreen defaults to True for the Pi kiosk, but a desktop wants
+        #     a window it can move and close from its own titlebar. The
+        #     SynapseOS launcher sets CHIBI_FULLSCREEN=0 so the packaged build
+        #     comes up windowed without this file drifting between the three
+        #     copies (tools/check-shared.sh keeps them identical).
+        for env, attr in (
+            ("CHIBI_FULLSCREEN", "fullscreen"),
+        ):
+            val = os.environ.get(env)
+            if val is not None and val.strip() != "":
+                setattr(self, attr,
+                        val.strip().lower() not in ("0", "false", "no", "off"))
+
         # 3. Personalize the prompt templates with the resolved user name so a
         #    fresh install never ships someone else's identity. Uses str.replace
         #    (not .format) so the many other literal "{...}" braces in the
