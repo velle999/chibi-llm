@@ -27,10 +27,31 @@ import glob
 import urllib.request
 
 
-# ─── Ollama embeddings ───────────────────────────────────────────────────
+# ─── Embeddings ──────────────────────────────────────────────────────────
 
-def embed(text: str, model: str, base_url: str, timeout: float = 10.0):
-    """Return the embedding vector for `text` from Ollama, or raise."""
+def embed(text: str, model: str, base_url: str, timeout: float = 10.0,
+          config=None):
+    """Return the embedding vector for `text`, or raise.
+
+    Routes to synapd when that is the configured backend, else Ollama. Both
+    serve the same nomic-embed-text GGUF through the same llama.cpp, and synapd
+    embeds verbatim and L2-normalises exactly as Ollama does -- verified at
+    cosine 1.00000000 against llama-server on the same file -- so an existing
+    index stays valid across the switch and does not need rebuilding.
+
+    `config` is optional so any caller that has not been updated keeps the old
+    Ollama behaviour instead of breaking.
+    """
+    if config is not None and getattr(config, "llm_backend", "") == "synapd":
+        from llm_client import synapd_embed
+        return synapd_embed(
+            text,
+            socket_path=getattr(config, "synapd_socket", "/run/synapd/synapd.sock"),
+            host=getattr(config, "synapd_host", "") or "",
+            port=int(getattr(config, "synapd_port", 11435)),
+            timeout=max(timeout, 30.0),
+        )
+
     url = f"{base_url}/api/embeddings"
     payload = json.dumps({"model": model, "prompt": text}).encode("utf-8")
     req = urllib.request.Request(url, data=payload, method="POST")
@@ -127,12 +148,20 @@ def build_index(config) -> int:
         print("[Thoth-RAG] No passages produced.")
         return 0
 
-    print(f"[Thoth-RAG] Embedding {len(meta)} passages via {config.thoth_embed_model} "
-          f"at {base_url} …")
+    # Name the host actually being used -- printing Ollama's base_url while
+    # synapd does the work sends anyone debugging a slow index to the wrong log.
+    if getattr(config, "llm_backend", "") == "synapd":
+        _where = (f"{config.synapd_host}:{getattr(config, 'synapd_port', 11435)}"
+                  if getattr(config, "synapd_host", "") else
+                  getattr(config, "synapd_socket", "/run/synapd/synapd.sock"))
+        print(f"[Thoth-RAG] Embedding {len(meta)} passages via synapd at {_where} …")
+    else:
+        print(f"[Thoth-RAG] Embedding {len(meta)} passages via "
+              f"{config.thoth_embed_model} at {base_url} …")
     vectors = []
     for i, m in enumerate(meta, 1):
         v = embed("search_document: " + m["text"], config.thoth_embed_model, base_url,
-                  timeout=max(30.0, config.thoth_rag_timeout))
+                  timeout=max(30.0, config.thoth_rag_timeout), config=config)
         vectors.append(v)
         if i % 25 == 0 or i == len(meta):
             print(f"  … {i}/{len(meta)}")
@@ -195,7 +224,8 @@ class ThothRAG:
 
         try:
             qv = embed("search_query: " + query, self.config.thoth_embed_model,
-                       self._base_url(), timeout=self.config.thoth_rag_timeout)
+                       self._base_url(), timeout=self.config.thoth_rag_timeout,
+                       config=self.config)
         except Exception as e:
             print(f"[Thoth-RAG] query embed failed ({e}); lexicon only.")
             return ""

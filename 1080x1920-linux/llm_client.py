@@ -37,7 +37,68 @@ _SYNAPD_HDR = struct.Struct("<IBBHIIIQ")
 _SYNAPD_MAGIC = 0x53594E41          # "SYNA"
 _SYNAPD_VER = 1
 _SYNAPD_MSG_QUERY = 0x01
+_SYNAPD_MSG_EMBED = 0x0B
 _SYNAPD_MSG_ERROR = 0xFF
+
+
+def synapd_embed(text: str, *, socket_path: str = "/run/synapd/synapd.sock",
+                 host: str = "", port: int = 11435,
+                 timeout: float = 30.0) -> list[float]:
+    """Embed one string via synapd (SYN_MSG_EMBED), returning the vector.
+
+    Module-level rather than an LLMClient method because Thoth's indexer runs
+    without a chat client, and standing one up just to embed would drag the
+    persona and health-check machinery along with it.
+
+    The reply payload is a raw little-endian float32 array -- the dimension is
+    implied by its length, so nothing here has to know it is 768.
+
+    The text is sent VERBATIM. nomic's "search_query: " / "search_document: "
+    prefixes are the caller's job and Thoth already adds them, exactly as it did
+    when Ollama served this; adding them here as well would double them and
+    quietly move every vector away from the stored ones.
+    """
+    payload = text.encode("utf-8") + b"\x00"
+    header = _SYNAPD_HDR.pack(
+        _SYNAPD_MAGIC, _SYNAPD_VER, _SYNAPD_MSG_EMBED, 0,
+        len(payload), 1, os.getpid(), 0,
+    )
+
+    if host:
+        sock = socket.create_connection((host, port), timeout=timeout)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    else:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect(socket_path)
+
+    try:
+        sock.sendall(header + payload)
+
+        def _exact(n: int) -> bytes:
+            buf = bytearray()
+            while len(buf) < n:
+                chunk = sock.recv(n - len(buf))
+                if not chunk:
+                    raise ConnectionError("synapd: connection closed mid-message")
+                buf.extend(chunk)
+            return bytes(buf)
+
+        (magic, _ver, msg_type, _flags,
+         plen, _rid, _pid, _ts) = _SYNAPD_HDR.unpack(_exact(_SYNAPD_HDR.size))
+        if magic != _SYNAPD_MAGIC:
+            raise ConnectionError("synapd: bad response magic")
+        body = _exact(plen) if plen else b""
+
+        if msg_type == _SYNAPD_MSG_ERROR:
+            msg = body.split(b"\x00", 1)[0].decode("utf-8", "replace")
+            raise ConnectionError(f"synapd error: {msg}")
+        if not body or len(body) % 4:
+            raise ValueError(f"synapd: bad embedding payload ({len(body)} bytes)")
+
+        return list(struct.unpack(f"<{len(body) // 4}f", body))
+    finally:
+        sock.close()
 
 
 class LLMClient:
