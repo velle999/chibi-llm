@@ -1,5 +1,5 @@
 {
-  "_about": "Thoth correspondence lexicon. Curated starter set: dream/vision symbols and their associations across the traditions named in the Thoth system prompt. Presented as resonance, never as fixed meaning. Extend freely — add objects to 'symbols'. 'aliases' are matched case-insensitively on word boundaries against what Velle says.",
+  "_about": "Thoth correspondence lexicon. Curated starter set: dream/vision symbols and their associations across the traditions named in the Thoth system prompt. Presented as resonance, never as fixed meaning. Extend freely — add objects to 'symbols'. 'aliases' are matched case-insensitively on word boundaries against what the user says.",
   "symbols": [
     {
       "symbol": "serpent",

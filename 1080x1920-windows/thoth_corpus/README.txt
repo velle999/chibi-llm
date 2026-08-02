@@ -2,7 +2,7 @@ Thoth corpus — primary source texts for retrieval (RAG phase 2)
 ================================================================
 
 Drop PLAIN-TEXT (.txt) files of public-domain source material in this folder,
-one work per file. The filename becomes the citation shown to Velle, so name
+one work per file. The filename becomes the citation shown to the user, so name
 them readably — underscores become spaces:
 
     the_kybalion.txt                  -> "the kybalion"

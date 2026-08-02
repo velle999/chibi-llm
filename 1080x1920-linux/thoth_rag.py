@@ -123,13 +123,35 @@ def _chunk(raw: str, target_words: int):
 
 # ─── Offline indexer ─────────────────────────────────────────────────────
 
+def _is_corpus_note(path: str) -> bool:
+    """True for housekeeping files in the corpus dir that are not source texts.
+
+    thoth_corpus/README.txt is the instructions for what to *put* in the
+    folder, but it is a .txt sitting in it, so the glob swept it up and
+    embedded it like scripture: three retrievable chunks cited to a "README"
+    source, one of which named the machine's owner by name. Retrieval could
+    then hand the model its own filing instructions as though they were
+    Hermetic doctrine.
+
+    Skip READMEs and the usual editor/OS leavings. Deliberately *not* a
+    hardcoded "README.txt" match -- LICENSE, notes_.txt and .DS_Store-style
+    files are the same kind of thing and would be the same bug.
+    """
+    name = os.path.basename(path).lower()
+    if name.startswith((".", "_")):
+        return True
+    stem = os.path.splitext(name)[0]
+    return stem in {"readme", "license", "licence", "copying", "notes", "todo"}
+
+
 def build_index(config) -> int:
     """Build the vector index from config.thoth_corpus_dir. Returns chunk count."""
     import numpy as np
 
     base_url = f"http://{config.llm_host}:{config.llm_port}"
     corpus_dir = config.thoth_corpus_dir
-    files = sorted(glob.glob(os.path.join(corpus_dir, "*.txt")))
+    files = sorted(fp for fp in glob.glob(os.path.join(corpus_dir, "*.txt"))
+                   if not _is_corpus_note(fp))
     if not files:
         print(f"[Thoth-RAG] No .txt files in {corpus_dir}/ — nothing to index.")
         return 0
