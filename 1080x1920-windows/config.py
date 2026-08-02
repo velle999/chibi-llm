@@ -341,10 +341,16 @@ class Config:
     # your LAN. Peer-to-peer union-merge — set each machine's peer_host to the
     # OTHER machine's address in config.local.py, and use the SAME port + token
     # on both. Off by default until you point it at a real peer.
+    #
+    # dream_sync_token has NO default on purpose. It used to ship as
+    # "change-this-shared-secret", which is not a secret: any two installs that
+    # left it alone would authenticate each other. Empty was worse still — it
+    # made the server accept every request. dream_sync.py now refuses to start
+    # on either, so this must be set in config.local.py to a real value.
     dream_sync_enabled: bool = False
     dream_sync_peer_host: str = "127.0.0.1"        # the OTHER chibi (set in config.local.py)
     dream_sync_port: int = 8077                    # same on both machines
-    dream_sync_token: str = "change-this-shared-secret"  # same on both machines
+    dream_sync_token: str = ""                     # REQUIRED — set in config.local.py
     dream_sync_interval: int = 300                 # background pull every N seconds
     dream_sync_timeout: float = 8.0                # per-request network timeout
 

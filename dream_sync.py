@@ -15,11 +15,30 @@ when a dream is recorded — whoever comes online later just pulls the rest.
 Stdlib only (http.server + urllib) — no extra dependencies, runs fine on a Pi.
 """
 
+import hmac
 import json
 import threading
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+# Tokens that are not secrets. "" is the unset default; the rest are the
+# placeholder this file used to ship with, which anyone who never edited it
+# would still be carrying. See _token_is_usable().
+_UNUSABLE_TOKENS = frozenset({"", "change-this-shared-secret", "changeme"})
+
+
+def _token_is_usable(token: str) -> bool:
+    """Whether `token` is a real shared secret rather than a shipped default.
+
+    Two separate installs that both left the placeholder alone would happily
+    authenticate each other, and an empty token used to make _auth_ok() accept
+    *every* request — the journal is personal, so both are failures. This is
+    the only thing standing between the dream journal and the LAN, so it fails
+    closed: no usable token means sync does not run at all.
+    """
+    return token.strip() not in _UNUSABLE_TOKENS
 
 
 class DreamSync:
@@ -29,7 +48,10 @@ class DreamSync:
         self.memory = memory
         self.peer_host = getattr(config, "dream_sync_peer_host", "").strip()
         self.port = int(getattr(config, "dream_sync_port", 8077))
-        self.token = getattr(config, "dream_sync_token", "")
+        # Normalised once: _auth_ok compares this verbatim, so a trailing
+        # newline in one machine's config.local.py would otherwise make two
+        # correctly-configured peers reject each other.
+        self.token = (getattr(config, "dream_sync_token", "") or "").strip()
         self.interval = int(getattr(config, "dream_sync_interval", 300))
         self.timeout = float(getattr(config, "dream_sync_timeout", 8.0))
         self._server = None
@@ -46,7 +68,10 @@ class DreamSync:
                 pass
 
             def _auth_ok(self):
-                return not token or self.headers.get("X-Sync-Token") == token
+                # No "not token" escape hatch: an unset token must never mean
+                # "let everyone in". start() guarantees a usable one by here.
+                return hmac.compare_digest(
+                    self.headers.get("X-Sync-Token", ""), token)
 
             def do_GET(self):
                 if self.path.rstrip("/") != "/dreams":
@@ -76,12 +101,13 @@ class DreamSync:
 
     def sync_once(self) -> int:
         """Pull the peer's dream entries and merge new ones in. Returns count added."""
-        if not self.peer_host:
+        # Checked here as well as in start(): main.py keeps the object around
+        # after a refused start(), so sync_soon() can still reach this.
+        if not self.peer_host or not _token_is_usable(self.token):
             return 0
         url = f"http://{self.peer_host}:{self.port}/dreams"
         req = urllib.request.Request(url)
-        if self.token:
-            req.add_header("X-Sync-Token", self.token)
+        req.add_header("X-Sync-Token", self.token)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 remote = json.loads(resp.read().decode("utf-8"))
@@ -102,7 +128,18 @@ class DreamSync:
             self._stop.wait(self.interval)
 
     def start(self):
-        """Start the server and the periodic pull loop (both as daemon threads)."""
+        """Start the server and the periodic pull loop (both as daemon threads).
+
+        Refuses outright without a real shared secret. Serving the journal on
+        0.0.0.0 guarded by a token everyone can read off GitHub is worse than
+        not serving it, so this is the one failure that is louder than it is
+        convenient.
+        """
+        if not _token_is_usable(self.token):
+            print("[DreamSync] Refusing to start: dream_sync_token is unset or "
+                  "still the shipped placeholder. Set a real shared secret in "
+                  "config.local.py — the SAME one on both machines.")
+            return
         self.start_server()
         threading.Thread(target=self._loop, daemon=True).start()
 
