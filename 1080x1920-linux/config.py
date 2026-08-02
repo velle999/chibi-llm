@@ -370,23 +370,43 @@ class Config:
         """
         import os
 
-        # 1. Optional gitignored config.local.py beside this file. It may set
-        #    any Config attribute, e.g.  dream_sync_token = "real-secret"
-        local_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "config.local.py"
-        )
-        if os.path.exists(local_path):
+        # 1. Optional gitignored config.local.py. It may set any Config
+        #    attribute, e.g.  dream_sync_token = "real-secret"
+        #
+        #    Searched in three places, each overriding the one before:
+        #
+        #      <app dir>/config.local.py   beside this file -- the dev tree, and
+        #                                  how this has always worked
+        #      /etc/chibi/config.local.py  system-wide
+        #      $XDG_CONFIG_HOME/chibi/config.local.py   per user
+        #
+        #    The app dir alone is not enough for a PACKAGED install: it is
+        #    /usr/lib/chibi/app, owned by root and replaced wholesale on every
+        #    upgrade, so settings put there are silently lost the next time the
+        #    package is rebuilt -- and config.local.py is gitignored, so the
+        #    package cannot ship one either. That is why a packaged chibi ran
+        #    with dream sync off and the default peer while the dev tree beside
+        #    it was configured correctly.
+        xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+        local_paths = [
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.local.py"),
+            "/etc/chibi/config.local.py",
+            os.path.join(xdg, "chibi", "config.local.py"),
+        ]
+        for i, local_path in enumerate(local_paths):
+            if not os.path.exists(local_path):
+                continue
             import importlib.util
             try:
                 spec = importlib.util.spec_from_file_location(
-                    "chibi_config_local", local_path)
+                    f"chibi_config_local_{i}", local_path)
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
                 for key in vars(mod):
                     if not key.startswith("_") and hasattr(self, key):
                         setattr(self, key, getattr(mod, key))
             except Exception as e:
-                print(f"[Config] Could not load config.local.py: {e}")
+                print(f"[Config] Could not load {local_path}: {e}")
 
         # 2. Environment variables win (handy for systemd / kiosk launch).
         for env, attr in (
