@@ -243,3 +243,26 @@ To reset: `rm ~/.chibi-avatar-memory.json`
 **Voice feedback loop:** Should be fixed — mic pauses during TTS. If it still happens, lower mic sensitivity or increase the physical distance between speaker and mic.
 
 **Old memory causing issues:** `rm ~/.chibi-avatar-memory.json` for a fresh start.
+
+---
+
+## License
+
+Copyright © 2026 Velle Sinclair.
+
+chibi is free software: you can redistribute it and/or modify it under the terms
+of the **GNU General Public License as published by the Free Software Foundation,
+either version 2 of the License, or (at your option) any later version**
+(`GPL-2.0-or-later`). The full text is in [LICENSE](LICENSE).
+
+It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See the GNU General Public License for more details.
+
+### Third-party components
+
+The SynapseOS `chibi` package vendors chibi's Python dependencies alongside it.
+Those are **not** covered by the licence above — they remain under their own
+terms (largely MIT and Apache-2.0), and each ships its own licence file in
+`pydeps/<package>.dist-info/licenses/`. Piper voice models are a dependency
+rather than part of this repository and carry their own terms.
