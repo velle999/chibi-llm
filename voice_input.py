@@ -48,21 +48,62 @@ _NOISE_HALLUCINATIONS = {
 }
 
 
+def _has_alsa_pcm(name):
+    """Is ``name`` a PCM ALSA can open?
+
+    Matched at COLUMN 0. ``arecord -L`` prints each PCM name flush left with an
+    indented description under it, and those descriptions mention "pipewire"
+    too — an ``in`` test over the whole output, or a strip() per line, answers
+    yes on a box that has no such device and hands arecord a name that does not
+    open.
+    """
+    try:
+        out = subprocess.run(
+            ["arecord", "-L"], capture_output=True, text=True, timeout=5
+        ).stdout
+    except Exception:
+        return False
+    return any(line.rstrip() == name for line in out.splitlines())
+
+
 def _resolve_alsa_device():
     """Pick an ALSA capture device for arecord.
 
-    The bare ALSA ``default`` device is frequently absent on a headless Pi
-    (no card 0 capture), so ``arecord`` exits instantly with "audio open
-    error: No such file or directory" and the recorder appears to "stop
-    unexpectedly". So: honour an explicit ``CHIBI_MIC_DEVICE`` override;
-    otherwise probe ``arecord -l`` and address the first capture card by
-    NAME. The USB index (``hw:3``) drifts across reboots/replugs, but
-    ``plughw:CARD=<name>`` is stable and also converts to s16le @ RATE if the
-    mic can't deliver that natively. Returns None to fall back to ``default``.
+    ⛔ THE FIRST CARD IS NOT THE MICROPHONE. This used to take the first
+    ``card N:`` out of ``arecord -l`` and address it by name, which is right on
+    the single-card Pi this was written for and wrong on anything else: on a
+    desktop the first card is the built-in analogue codec, usually with nothing
+    plugged into it, and the USB microphone is card 3. chibi then recorded an
+    empty jack — peak 153/32768 against 925 from the mic actually in use — and
+    every attempt came back "heard nothing", which is ALSO the message for a
+    user who simply said nothing. An empty jack is not an error: arecord opens
+    it, reads its noise floor and exits 0, so nothing anywhere reports a wrong
+    device. The only symptom is that it never works.
+
+    So: an explicit ``CHIBI_MIC_DEVICE`` first — it is the escape hatch and
+    somebody who set it meant it. Then PipeWire's own PCM, which follows the
+    DEFAULT SOURCE and therefore tracks whatever the desktop is set to,
+    including a microphone plugged in or swapped mid-session. Naming the right
+    card instead would pin today's hardware and be wrong again at the next
+    replug.
+
+    Only then the old first-card probe, unchanged, for the Pi: the bare ALSA
+    ``default`` is frequently absent there (no card 0 capture), so ``arecord``
+    exits instantly with "audio open error: No such file or directory" and the
+    recorder appears to "stop unexpectedly". ``plughw:CARD=<name>`` is stable
+    where the USB index (``hw:3``) drifts across reboots, and it converts to
+    s16le @ RATE if the mic cannot deliver that natively.
+
+    Returns None to fall back to ``default``.
     """
     override = os.environ.get("CHIBI_MIC_DEVICE")
     if override:
         return override
+    # Not cached: this runs once at the start of a capture that already costs
+    # seconds of model load, and a cached answer would outlive the audio stack
+    # it described.
+    if _has_alsa_pcm("pipewire"):
+        return "pipewire"
     try:
         out = subprocess.run(
             ["arecord", "-l"], capture_output=True, text=True, timeout=5
