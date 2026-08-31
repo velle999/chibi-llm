@@ -592,10 +592,6 @@ class ChibiAvatarApp:
         ONCE from them and never consulted again, so until now they kept the
         size the window happened to have at startup for the rest of the session:
 
-          - THE AVATAR, which was drawn at a flat config.chibi_scale that never
-            knew the window size at all. One fixed pixel size in every window:
-            adrift in a large one, cropped by a small one, while the ticker and
-            input bar — which measure the surface — spanned it correctly.
           - THE STARFIELD, scattered inside the old bounds, so it bunched into a
             corner as soon as the window grew.
           - THE SCANLINES, a surface of the old size blitted at (0, 0), which
@@ -613,12 +609,12 @@ class ChibiAvatarApp:
         self.config.window_width, self.config.window_height = screen.get_size()
         w, h = self.config.window_width, self.config.window_height
 
-        # The avatar does its own arithmetic: sprite_renderer.py is per-variant,
-        # and the size its art was drawn for is exactly the number this shared
-        # file must not contain.
-        fit = getattr(getattr(self, "renderer", None), "fit_to", None)
-        if callable(fit):
-            fit(w, h)
+        # ⛔ THE AVATAR IS DELIBERATELY NOT SCALED HERE. Deriving her size from
+        # the window was tried and was worse than the bug: against a 1080x1920
+        # design, a 580x470 window gives min(0.54, 0.24) = 0.24, and she came
+        # out a quarter size in the middle of an empty scene. What has to follow
+        # the window is the BACKGROUND. Her size stays config.chibi_scale, which
+        # is a setting, and settings are not the window's business.
 
         if (old_w, old_h) == (w, h):
             return
@@ -1967,6 +1963,22 @@ class ChibiAvatarApp:
                 # adopting the size once in _init_display is not enough — the
                 # configure that matters arrives here, a frame or two later.
                 if event.type == pygame.VIDEORESIZE:
+                    # ⛔ SDL2 DOES NOT HAND BACK A RESIZED SURFACE ON ITS OWN,
+                    # and get_surface() keeps returning the old one. Reading it
+                    # here and stopping was the whole bug: the display surface
+                    # stayed the size it was created at, so every background
+                    # element — grid, starfield, scanlines, the panels — kept
+                    # painting into that smaller rectangle while the window grew
+                    # around it, leaving raw undrawn space down the right and
+                    # bottom edges.
+                    #
+                    # ⚠ AND self.screen HAS TO BE REBOUND. It is the surface
+                    # every draw call in this file targets; set_mode returns a
+                    # NEW surface object, so keeping the old reference would
+                    # carry on drawing into the stale one and change nothing.
+                    if not self.config.fullscreen:
+                        self.screen = pygame.display.set_mode(
+                            event.size, pygame.RESIZABLE)
                     self._adopt_surface_size(pygame.display.get_surface())
                     continue
 
