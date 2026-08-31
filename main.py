@@ -1976,10 +1976,25 @@ class ChibiAvatarApp:
                     # every draw call in this file targets; set_mode returns a
                     # NEW surface object, so keeping the old reference would
                     # carry on drawing into the stale one and change nothing.
-                    if not self.config.fullscreen:
+                    # ⛔ ONLY WHEN THE SURFACE ACTUALLY DISAGREES. set_mode
+                    # ASKS the compositor for a size; the compositor answers
+                    # with a configure, which arrives here as another
+                    # VIDEORESIZE — so calling it unconditionally is a feedback
+                    # loop, and the window visibly pulses. Under a tiling
+                    # compositor, which grants the size IT chose rather than the
+                    # one asked for, the two never agree and it never settles.
+                    #
+                    # Where SDL has already resized the surface itself the sizes
+                    # match and nothing is called, which is the common path.
+                    # Where it has not, this runs once and the next event
+                    # matches, so it converges either way.
+                    surf = pygame.display.get_surface()
+                    if (not self.config.fullscreen and surf is not None
+                            and surf.get_size() != event.size):
                         self.screen = pygame.display.set_mode(
                             event.size, pygame.RESIZABLE)
-                    self._adopt_surface_size(pygame.display.get_surface())
+                        surf = pygame.display.get_surface()
+                    self._adopt_surface_size(surf)
                     continue
 
                 # Window controls are drawn above every overlay, so they must
