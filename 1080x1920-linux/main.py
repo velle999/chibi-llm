@@ -578,15 +578,62 @@ class ChibiAvatarApp:
         return screen
 
     def _adopt_surface_size(self, screen):
-        """Point config.window_* at the surface we actually got.
+        """Point config.window_* at the surface we got, and re-derive what was
+        sized from the old one.
 
         Roughly forty layout sites read config.window_width/height rather than
         measuring the surface, so these two values ARE the layout. Any time the
         real surface changes size they have to follow, or everything that reads
         them draws to the old geometry while everything that measures the
         surface draws to the new one.
+
+        ⛔ BUT THOSE TWO NUMBERS ARE NOT THE WHOLE LAYOUT. Three things are built
+        ONCE from them and never consulted again, so until now they kept the
+        size the window happened to have at startup for the rest of the session:
+
+          - THE AVATAR, which was drawn at a flat config.chibi_scale that never
+            knew the window size at all. One fixed pixel size in every window:
+            adrift in a large one, cropped by a small one, while the ticker and
+            input bar — which measure the surface — spanned it correctly.
+          - THE STARFIELD, scattered inside the old bounds, so it bunched into a
+            corner as soon as the window grew.
+          - THE SCANLINES, a surface of the old size blitted at (0, 0), which
+            simply stopped covering the bottom and right of a bigger window.
+
+        A tiling compositor sizes this window the moment it maps and again on
+        every retile, so "the size at startup" is not a size anybody chose.
+
+        ⚠ THIS RUNS DURING __init__, BEFORE the renderer and both caches exist —
+        _init_display() is called first. Each is therefore probed for, not
+        assumed; a hard reference here is an AttributeError on every launch.
         """
+        old_w = self.config.window_width
+        old_h = self.config.window_height
         self.config.window_width, self.config.window_height = screen.get_size()
+        w, h = self.config.window_width, self.config.window_height
+
+        # The avatar does its own arithmetic: sprite_renderer.py is per-variant,
+        # and the size its art was drawn for is exactly the number this shared
+        # file must not contain.
+        fit = getattr(getattr(self, "renderer", None), "fit_to", None)
+        if callable(fit):
+            fit(w, h)
+
+        if (old_w, old_h) == (w, h):
+            return
+
+        # Moved, not regenerated. A fresh scatter on every configure event would
+        # make the sky twitch each time the compositor nudges the window.
+        stars = getattr(self, "bg_stars", None)
+        if stars and old_w > 0 and old_h > 0:
+            sx, sy = w / old_w, h / old_h
+            for star in stars:
+                star["x"] *= sx
+                star["y"] *= sy
+
+        # Cheap to redraw, and wrong at any size but the one it was made for.
+        if getattr(self, "scanline_surf", None) is not None:
+            self.scanline_surf = self._create_scanlines()
 
     def _extract_memories(self):
         """Ask the LLM to extract memorable facts from recent conversation."""

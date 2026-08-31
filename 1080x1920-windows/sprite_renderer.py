@@ -10,10 +10,25 @@ import random
 from config import Config
 
 
+# The window this art was drawn for: the portrait panel this variant is drawn for.
+# Every offset, radius and ratio below is in these pixels, so another
+# window size needs the whole avatar scaled, not merely re-anchored.
+# ⚠ PER-VARIANT ON PURPOSE. sprite_renderer.py is deliberately not in
+# chibi's shared-file list, and main.py — which is — must not know a
+# number that is only true for one of the three copies.
+DESIGN_SIZE = (1080, 1920)
+
+
 class ChibiRenderer:
     def __init__(self, config: Config):
         self.config = config
-        self.scale = config.chibi_scale
+        # base_scale is the SETTING; scale is the setting after the
+        # window has had its say. Keeping them apart is what lets a
+        # resize be re-derived instead of compounding: multiplying
+        # self.scale by each new fit would shrink the avatar a little
+        # more on every configure event a tiling compositor sends.
+        self.base_scale = config.chibi_scale
+        self.scale = self.base_scale
         self.floaties: list[dict] = []
         self.floaty_timer = 0
 
@@ -36,6 +51,24 @@ class ChibiRenderer:
         self._glow_pulse = 0.0
 
     # ─── Primitives ──────────────────────────────────────────────────────
+
+    def fit_to(self, width, height):
+        """Scale the avatar to a window that is not the one it was drawn for.
+
+        ⛔ THE AVATAR NEVER KNEW THE WINDOW SIZE. scale was config.chibi_scale
+        and nothing else, so the drawing came out one fixed pixel size in
+        every window — lost in a corner of a large one, cropped by a small
+        one — while the ticker and input bar, which measure the surface,
+        spanned it correctly. That mismatch is the whole bug.
+
+        min() of the two ratios, so the avatar keeps its proportions and
+        fits inside whichever axis is tighter; taking them separately would
+        stretch her to the window's aspect.
+        """
+        dw, dh = DESIGN_SIZE
+        if width <= 0 or height <= 0 or dw <= 0 or dh <= 0:
+            return
+        self.scale = self.base_scale * min(width / dw, height / dh)
 
     def _glow_circle(self, surface, color, center, radius, glow_radius=None, alpha=60):
         if glow_radius is None:
