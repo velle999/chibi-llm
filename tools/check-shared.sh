@@ -21,6 +21,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
 SHARED=(
+    assistant_bridge.py
     config.py
     data_feeds.py
     llm_client.py

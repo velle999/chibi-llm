@@ -32,6 +32,7 @@ from voice_input import VoiceInput
 from voice_output import VoiceOutput
 from data_feeds import DataFeedManager
 from hud_overlay import HUDOverlay
+import assistant_bridge
 from memory import PersistentMemory
 from soul import Soul
 from thoth import ThothCorpus
@@ -1247,6 +1248,11 @@ class ChibiAvatarApp:
         # ── Horus mode trigger check ──────────────────────────────────────
         if self._check_horus_triggers(text):
             return
+        # ── Desktop request check ─────────────────────────────────────────
+        # Last of the guards, so chibi's own triggers (alarms, Horus, security)
+        # still win the words they already claimed.
+        if self._check_desktop_intent(text):
+            return
         # ── Normal message ────────────────────────────────────────────────
         self.conversation.append({"role": "user", "content": text})
         self.set_state(AvatarState.THINKING)
@@ -1264,6 +1270,75 @@ class ChibiAvatarApp:
             daemon=True,
         )
         thread.start()
+
+    # Yes, said the handful of ways people actually say it. Anything else is a
+    # no: a confirmation gate that accepts ambiguity is not a gate.
+    _AFFIRM_RE = re.compile(
+        r"^(?:y|ye|yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|please do)\b",
+        re.I)
+
+    def _intent_say(self, reply: str):
+        """Answer in chibi's own voice, without troubling the model."""
+        self.bubble.set_text(reply)
+        if self.voice_out:
+            self.voice_out.speak(reply)
+        self.last_interaction = time.time()
+
+    def _run_intent(self, hit):
+        """Execute a resolved desktop request on a thread.
+
+        ⚠ NOT ON THE FRAME LOOP. A tool can shell out and take seconds, and this
+        is called from the same place that draws — running it inline freezes the
+        avatar mid-blink for as long as the command takes, which reads as a
+        crash.
+        """
+        def work():
+            out = (assistant_bridge.run(hit) or "").strip()
+            self._intent_say(out if out else "Done!")
+        threading.Thread(target=work, daemon=True).start()
+
+    def _check_desktop_intent(self, text: str) -> bool:
+        """Do the desktop thing that was asked for. True if this line was one.
+
+        ⛔ THE MODEL IS NOT CONSULTED, AND THAT IS THE POINT. "open my downloads"
+        is not a question about the world; sending it to an LLM so it can emit
+        the tool call vibe has already resolved is slower and less reliable than
+        simply running it. vibe measured that and skips the model here; chibi
+        goes through the same matcher so the two front-ends cannot disagree
+        about what the desktop was asked to do.
+
+        ⚠ THE CONFIRMATION GATE IS VIBE'S AND IS HONOURED. hit.confirm marks the
+        requests that must be agreed to before they run. chibi has no dialogs,
+        so it asks in the bubble and the NEXT line is the answer — and anything
+        that is not plainly yes counts as no.
+        """
+        pending = getattr(self, "_pending_intent", None)
+        if pending is not None:
+            self._pending_intent = None
+            if self._AFFIRM_RE.match(text.strip()):
+                self._run_intent(pending)
+            else:
+                self._intent_say("Okay, leaving it alone.")
+            return True
+
+        if not assistant_bridge.available():
+            return False
+        hit = assistant_bridge.match(text)
+        if hit is None:
+            return False
+
+        # A fact rather than an action — vibe answers some lines outright.
+        if getattr(hit, "answer", ""):
+            self._intent_say(hit.answer)
+            return True
+
+        if getattr(hit, "confirm", False):
+            self._pending_intent = hit
+            self._intent_say(f"That means {hit.tool}. Want me to?")
+            return True
+
+        self._run_intent(hit)
+        return True
 
     # Sentence boundary for streaming TTS: terminal punctuation, optional
     # closing quote/bracket, then whitespace.
@@ -1359,6 +1434,18 @@ class ChibiAvatarApp:
                 mood_ctx = self.soul.get_mood_context()
                 if mood_ctx:
                     extra_system += "\n\n" + mood_ctx
+
+            # What the desktop assistant is tracking. The return leg of the
+            # memory bridge: vibe is given chibi's memory (vibe/chibi_bridge.py)
+            # and chibi is given vibe's records, so two assistants on one
+            # machine do not hold separate ideas of what the day looks like.
+            # Empty string where vibe is not installed, or has nothing to say.
+            try:
+                vibe_notes = assistant_bridge.notes_section()
+            except Exception:
+                vibe_notes = ""
+            if vibe_notes:
+                extra_system += "\n\n" + vibe_notes
 
             # Vision: if requested, capture and describe the scene
             if vision_request and self.vision:
