@@ -1789,9 +1789,9 @@ class ChibiAvatarApp:
             self.lightning_flash -= dt
 
     def draw_background(self, t):
-        # The sentinel sheds the scene entirely — no stars, no neon grid, no
-        # weather. A bare dark field, so the only thing moving on screen is the
-        # security state itself. (Hence the early return: unlike Thoth below,
+        # The sentinel sheds the scene entirely — no stars, no weather. A bare
+        # dark field, so the only thing moving on screen is the security state
+        # itself. (Hence the early return: unlike Thoth below,
         # which keeps the ambience, this aspect deliberately skips it.)
         if self.security_mode:
             self.screen.fill(self.config.security_bg_color)
@@ -1848,22 +1848,6 @@ class ChibiAvatarApp:
             )
             size = max(1, int(star['size'] * (0.7 + 0.3 * math.sin(t * star['speed']))))
             pygame.draw.circle(self.screen, color, (star['x'], star['y']), size)
-
-        # Subtle grid — static, so build it once and reuse. Rebuilding the
-        # full-screen surface + 30+ draw.line calls every frame was a big chunk
-        # of the per-frame render cost that starved the loop (badly enough in
-        # Horus mode that voice input stopped being serviced).
-        if getattr(self, "_grid_surf", None) is None:
-            grid_alpha = 15
-            gs = pygame.Surface(
-                (self.config.window_width, self.config.window_height), pygame.SRCALPHA
-            )
-            for x in range(0, self.config.window_width, 40):
-                pygame.draw.line(gs, (*self.config.neon_primary, grid_alpha), (x, 0), (x, self.config.window_height))
-            for y in range(0, self.config.window_height, 40):
-                pygame.draw.line(gs, (*self.config.neon_primary, grid_alpha), (0, y), (self.config.window_width, y))
-            self._grid_surf = gs
-        self.screen.blit(self._grid_surf, (0, 0))
 
         # Draw weather particles
         for wp in self.weather_particles:
@@ -1967,7 +1951,7 @@ class ChibiAvatarApp:
                     # and get_surface() keeps returning the old one. Reading it
                     # here and stopping was the whole bug: the display surface
                     # stayed the size it was created at, so every background
-                    # element — grid, starfield, scanlines, the panels — kept
+                    # element — the starfield, the scanlines, the panels — kept
                     # painting into that smaller rectangle while the window grew
                     # around it, leaving raw undrawn space down the right and
                     # bottom edges.

@@ -106,7 +106,7 @@ While in the aspect:
   without a round-trip through the LLM.
 - Say **"stand down"**, "exit", or "chibi mode" to leave.
 
-The screen goes bare and dark — no stars, no neon grid, no weather. The border
+The screen goes bare and dark — no stars, no weather. The border
 breathes amber, and turns red and pulses fast once synguard has actually blocked
 something, so the frame colour reflects real state rather than decoration.
 
