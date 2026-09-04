@@ -550,11 +550,22 @@ class DataFeedManager:
         self.news = NewsData()
         self._running = True
         self._lock = threading.Lock()
+        # ⚠ An Event rather than time.sleep(), so the weather can be asked for
+        # again the moment somebody changes the city. The interval is ten
+        # minutes: a settings panel that changed the city and then showed the
+        # old city's weather for the rest of the ten would read as a setting
+        # that did not take, which is worse than not offering it.
+        self._weather_wake = threading.Event()
 
-        # Start background threads
-        if self.config.weather_enabled:
-            t = threading.Thread(target=self._weather_loop, daemon=True)
-            t.start()
+        # Start background threads.
+        #
+        # ⚠ THE WEATHER THREAD STARTS EITHER WAY, and the loop asks the switch
+        # each time round instead. Gating the thread here means the switch is
+        # only ever read once, at startup: turning the weather ON in the
+        # settings panel would set a flag nothing was left to act on, and the
+        # panel that offered it would be a switch wired to nothing.
+        t = threading.Thread(target=self._weather_loop, daemon=True)
+        t.start()
 
         if self.config.market_enabled:
             t = threading.Thread(target=self._market_loop, daemon=True)
@@ -568,6 +579,11 @@ class DataFeedManager:
         """Fetch weather periodically with fallback chain."""
         while self._running:
             data = None
+            if not self.config.weather_enabled:
+                # Asked every time round, so the switch works while running.
+                self._weather_wake.wait(self.config.weather_interval)
+                self._weather_wake.clear()
+                continue
             try:
                 if self.config.weather_api_key:
                     data = fetch_weather_owm(
@@ -595,7 +611,8 @@ class DataFeedManager:
             except Exception as e:
                 print(f"[Weather] Feed error: {e}")
 
-            time.sleep(self.config.weather_interval)
+            self._weather_wake.wait(self.config.weather_interval)
+            self._weather_wake.clear()
 
     def _market_loop(self):
         """Fetch market data periodically."""
@@ -683,5 +700,12 @@ class DataFeedManager:
         with self._lock:
             return self.news
 
+    def refresh_weather(self):
+        """Fetch the weather again now, rather than at the next interval."""
+        self._weather_wake.set()
+
     def stop(self):
         self._running = False
+        # …and wake the sleeper, or shutting down waits out the rest of an
+        # interval that can be ten minutes long.
+        self._weather_wake.set()

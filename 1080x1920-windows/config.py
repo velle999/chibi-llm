@@ -173,6 +173,14 @@ class Config:
     market_interval: int = 300          # Fetch every 5 minutes
     ticker_scroll_speed: float = 60.0   # Pixels per second
 
+    # ── News ─────────────────────────────────────────────────────────────
+    # Declared, not merely read. data_feeds.py has always asked for this with
+    # getattr(self.config, 'news_enabled', True), which answers True on a
+    # Config that has no such attribute — so the headlines could be turned off
+    # in config.local.py and nowhere else, and the settings panel had nothing
+    # to write to.
+    news_enabled: bool = True
+
     # ── Vision (PS3 Eye Webcam) ──────────────────────────────────────────
     vision_enabled: bool = True
     camera_device: int = 0             # /dev/video0 — change if needed
@@ -456,8 +464,86 @@ class Config:
         #    (not .format) so the many other literal "{...}" braces in the
         #    prompts are left untouched, and a user-supplied prompt with no
         #    placeholder passes through unchanged.
-        for attr in ("llm_system_prompt", "horus_system_prompt",
-                     "security_system_prompt"):
-            val = getattr(self, attr, None)
-            if isinstance(val, str) and "{user_name}" in val:
-                setattr(self, attr, val.replace("{user_name}", self.user_name))
+        #
+        #    ⛔ THE TEMPLATES ARE KEPT, and that is what makes the name
+        #    changeable while the app is running. Substitution CONSUMES the
+        #    placeholder: once "{user_name}" has become "Alex" there is nothing
+        #    left for a second pass to find, so a settings panel that set
+        #    user_name would rename the person everywhere except in the prompts
+        #    Chibi actually speaks from — which is the only place the name is
+        #    for. apply_user_name() re-substitutes from these.
+        self._prompt_templates = {
+            attr: getattr(self, attr)
+            for attr in self.PERSONALIZED_PROMPTS
+            if isinstance(getattr(self, attr, None), str)
+        }
+        self.apply_user_name(self.user_name)
+
+    # The prompts that carry the user's name. Named once, so the capture above
+    # and the re-substitution below cannot fall out of step.
+    PERSONALIZED_PROMPTS = ("llm_system_prompt", "horus_system_prompt",
+                            "security_system_prompt")
+
+    def apply_user_name(self, name: str) -> None:
+        """Set user_name and rebuild every prompt that mentions it."""
+        self.user_name = name
+        for attr, template in getattr(self, "_prompt_templates", {}).items():
+            setattr(self, attr, template.replace("{user_name}", name))
+
+    # ── Where a setting the user changes is written ──────────────────────
+    #
+    # The XDG copy, always — never the app dir. On a packaged install that is
+    # /usr/lib/chibi/app: root-owned, and replaced wholesale on every upgrade,
+    # so a setting written there is either refused outright or silently lost at
+    # the next `pacman -U`. It is also the LAST of the three files loaded, so
+    # what is written here wins over both of the others.
+    @staticmethod
+    def user_config_path() -> str:
+        import os
+        xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+        return os.path.join(xdg, "chibi", "config.local.py")
+
+    def save_local(self, values: dict) -> str:
+        """Merge `values` into the user's config.local.py. Returns the path.
+
+        ⛔ MERGED INTO THE EXISTING FILE, NEVER WRITTEN OVER IT. This file is
+        the only place a person's own settings live — an API key, an LLM host,
+        a dream-sync token — and it is hand-edited. A panel that rewrote it
+        with the four fields it knows about would delete the rest, silently,
+        the first time somebody changed their city.
+
+        ⛔ AND EVERY VALUE GOES THROUGH repr(). The file is EXECUTED as Python:
+        a city with an apostrophe in it is a syntax error that stops the whole
+        file from loading, and a name is arbitrary text a person typed.
+        """
+        import os
+        path = self.user_config_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                lines = fh.read().splitlines()
+        except FileNotFoundError:
+            lines = ["# chibi — settings written by the gear in the window.",
+                     "# Hand edits are kept: only the lines below that name a",
+                     "# setting this file already sets are rewritten."]
+
+        remaining = dict(values)
+        out = []
+        for line in lines:
+            key = line.split("=", 1)[0].strip() if "=" in line else ""
+            if key in remaining:
+                out.append(f"{key} = {remaining.pop(key)!r}")
+            else:
+                out.append(line)
+        for key, val in remaining.items():
+            out.append(f"{key} = {val!r}")
+
+        # ⚠ Written whole and moved into place: an interrupted write leaves a
+        # file that is still valid Python, rather than a truncated one that
+        # takes every setting in it down on the next start.
+        tmp = path + ".new"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(out) + "\n")
+        os.replace(tmp, path)
+        return path

@@ -510,6 +510,14 @@ class ChibiAvatarApp:
         self._dream_detail = False     # True when drilled into one entry
         self._dream_scroll = 0         # line scroll offset in detail view
 
+        # Settings panel (the gear, top-right)
+        self.settings_open = False
+        self._settings_index = 0
+        self._settings_editing = False   # True while typing into the selected row
+        self._settings_draft = ""        # what has been typed, before Enter
+        self._settings_saved_at = 0.0    # when the "saved" line should stop showing
+        self._settings_error = ""        # a write that failed, said on the card
+
         # Conversation
         self.conversation: list[dict] = []
         self.response_text = ""
@@ -794,6 +802,171 @@ class ChibiAvatarApp:
         self._dream_detail = False
         self._dream_scroll = 0
         self.dream_view_open = True
+
+    # ── Settings panel ---------------------------------------------------
+    #
+    # The two things a person changes about Chibi that are not code: who she is
+    # talking to, and where the weather is. Both lived only in config.local.py,
+    # a Python file hand-edited in three possible locations — which on a
+    # packaged install is /usr/lib/chibi/app, root-owned and replaced on every
+    # upgrade, so the obvious one is also the wrong one.
+    #
+    # ⚠ EVERY ROW HERE TAKES EFFECT WHILE RUNNING, and that is what decided
+    # which rows exist. `user_name` rebuilds the prompts through
+    # Config.apply_user_name (substitution consumes the placeholder, so nothing
+    # else can); the city wakes the weather thread instead of waiting out its
+    # ten-minute interval; the switch is read by that thread each time round.
+    # A row that needed a restart to mean anything would be a row that reads as
+    # broken, so there is not one.
+    SETTINGS_ROWS = (
+        ("user_name",       "Your name",    "text"),
+        ("weather_city",    "Weather city", "text"),
+        ("weather_enabled", "Weather",      "bool"),
+    )
+
+    def _settings_value(self, key):
+        return getattr(self.config, key, "")
+
+    def _settings_apply(self, key, value):
+        """Set one setting, make it real now, and write it to the user's file."""
+        if key == "user_name":
+            self.config.apply_user_name(value)
+        else:
+            setattr(self.config, key, value)
+
+        if key in ("weather_city", "weather_enabled") and self.feeds:
+            # Ask for it again rather than showing the old city's weather for
+            # the rest of the interval.
+            self.feeds.refresh_weather()
+
+        try:
+            self.config.save_local({key: value})
+            self._settings_saved_at = time.time() + 2.5
+            self._settings_error = ""
+        except OSError as e:
+            # Said on screen rather than only on stderr: a settings panel that
+            # cannot write is a panel whose changes are gone at the next start,
+            # and there is no terminal to read behind a .desktop launch.
+            print(f"[Settings] could not save: {e}")
+            self._settings_error = str(e)
+
+    def _handle_settings_key(self, event):
+        if event.type != pygame.KEYDOWN:
+            return
+        key, label, kind = self.SETTINGS_ROWS[self._settings_index]
+
+        if self._settings_editing:
+            if event.key == pygame.K_RETURN:
+                self._settings_apply(key, self._settings_draft.strip())
+                self._settings_editing = False
+            elif event.key == pygame.K_ESCAPE:
+                # ⚠ Out of the FIELD, not out of the panel. Escape while typing
+                # means "forget what I typed"; a second Escape closes.
+                self._settings_editing = False
+            elif event.key == pygame.K_BACKSPACE:
+                self._settings_draft = self._settings_draft[:-1]
+            elif event.unicode and event.unicode.isprintable():
+                self._settings_draft += event.unicode
+            return
+
+        if event.key in (pygame.K_ESCAPE, pygame.K_F3):
+            self.settings_open = False
+        elif event.key in (pygame.K_DOWN, pygame.K_TAB):
+            self._settings_index = (self._settings_index + 1) % len(self.SETTINGS_ROWS)
+        elif event.key == pygame.K_UP:
+            self._settings_index = (self._settings_index - 1) % len(self.SETTINGS_ROWS)
+        elif kind == "bool" and event.key in (pygame.K_RETURN, pygame.K_SPACE,
+                                              pygame.K_LEFT, pygame.K_RIGHT):
+            self._settings_apply(key, not bool(self._settings_value(key)))
+        elif kind == "text" and event.key == pygame.K_RETURN:
+            self._settings_editing = True
+            self._settings_draft = str(self._settings_value(key))
+
+    def _draw_settings(self):
+        """The gear's panel: a card, not a full screen — Chibi stays visible."""
+        W, H = self.config.window_width, self.config.window_height
+        if not hasattr(self, "_set_title_font"):
+            self._set_title_font = pygame.font.SysFont("monospace", 22, bold=True)
+            self._set_font = pygame.font.SysFont("monospace", 18)
+            self._set_small = pygame.font.SysFont("monospace", 14)
+
+        accent = self.config.neon_primary
+        row_h = 40
+        pad = 22
+        # ⚠ Sized to the window, not to 1080x1920. This app is resizable and
+        # the panel is the newest thing in it; a card laid out at the design
+        # resolution is a card hanging off the side of a window somebody
+        # dragged narrower.
+        pw = max(320, min(560, W - 60))
+        ph = pad * 2 + 46 + len(self.SETTINGS_ROWS) * row_h + 54
+        px = (W - pw) // 2
+        py = max(self._WINCTL_MARGIN + self._WINCTL_SIZE + 12, (H - ph) // 3)
+
+        card = pygame.Surface((pw, ph), pygame.SRCALPHA)
+        pygame.draw.rect(card, (10, 10, 26, 242), (0, 0, pw, ph), border_radius=10)
+        pygame.draw.rect(card, (*accent, 160), (0, 0, pw, ph), width=1, border_radius=10)
+        self.screen.blit(card, (px, py))
+
+        title = self._set_title_font.render("SETTINGS", True, accent)
+        self.screen.blit(title, (px + pad, py + pad))
+
+        y = py + pad + 46
+        for i, (key, label, kind) in enumerate(self.SETTINGS_ROWS):
+            selected = (i == self._settings_index)
+            if selected:
+                sel = pygame.Surface((pw - pad * 2 + 12, row_h - 6), pygame.SRCALPHA)
+                pygame.draw.rect(sel, (*accent, 38), sel.get_rect(), border_radius=6)
+                pygame.draw.rect(sel, (*accent, 150), sel.get_rect(), width=1, border_radius=6)
+                self.screen.blit(sel, (px + pad - 6, y - 4))
+
+            lab = self._set_font.render(label, True, (215, 215, 230))
+            self.screen.blit(lab, (px + pad, y + 3))
+
+            if kind == "bool":
+                on = bool(self._settings_value(key))
+                shown = "On" if on else "Off"
+                colour = accent if on else (140, 140, 155)
+            elif selected and self._settings_editing:
+                # The caret is the only thing that says this row is taking
+                # keystrokes; without it an empty field looks like a value of
+                # nothing rather than a field waiting to be typed into.
+                shown = self._settings_draft + ("▌" if self.input_box.cursor_visible else " ")
+                colour = accent
+            else:
+                shown = str(self._settings_value(key))
+                colour = (170, 200, 230)
+
+            vs = self._set_font.render(shown, True, colour)
+            # Clipped from the LEFT while typing, so the caret stays on screen
+            # in a value longer than the field.
+            max_w = pw - pad * 2 - 150
+            if vs.get_width() > max_w:
+                vs = vs.subsurface(pygame.Rect(vs.get_width() - max_w, 0,
+                                               max_w, vs.get_height()))
+            self.screen.blit(vs, (px + pw - pad - vs.get_width(), y + 3))
+            y += row_h
+
+        if self._settings_editing:
+            hint = "Enter save · Esc cancel"
+        else:
+            hint = "↑/↓ choose · Enter change · Esc close"
+        hs = self._set_small.render(hint, True, (150, 150, 168))
+        self.screen.blit(hs, (px + pw // 2 - hs.get_width() // 2, py + ph - 40))
+
+        if getattr(self, "_settings_error", ""):
+            note, note_colour = self._settings_error[:52], (255, 120, 120)
+        elif time.time() < self._settings_saved_at:
+            note, note_colour = "Saved to " + self.config.user_config_path(), (140, 200, 150)
+        else:
+            note, note_colour = "", None
+        if note:
+            ns = self._set_small.render(note, True, note_colour)
+            # Elided from the LEFT: the file NAME is the part worth reading,
+            # and a long $HOME would otherwise push it off the card.
+            if ns.get_width() > pw - pad * 2:
+                ns = ns.subsurface(pygame.Rect(ns.get_width() - (pw - pad * 2), 0,
+                                               pw - pad * 2, ns.get_height()))
+            self.screen.blit(ns, (px + pw // 2 - ns.get_width() // 2, py + ph - 22))
 
     def _handle_dream_view_key(self, event):
         """Route keys while the dream overlay is open. Captures all input."""
@@ -1879,21 +2052,33 @@ class ChibiAvatarApp:
     _WINCTL_MARGIN = 10
 
     def _window_control_rects(self):
-        """Return (close_rect, restore_rect), laid out top-right."""
+        """Return (close_rect, restore_rect, settings_rect), laid out top-right.
+
+        Right to left, in the order they are reached for: close on the corner,
+        the fullscreen toggle beside it, then the gear. The gear goes on the
+        FAR side deliberately — it is the one of the three that is not a way of
+        getting rid of the window, and a settings panel opened by a hand aiming
+        for close is a settings panel nobody asked for.
+        """
         size = self._WINCTL_SIZE
         m = self._WINCTL_MARGIN
         w = self.config.window_width
         close = pygame.Rect(w - m - size, m, size, size)
         restore = pygame.Rect(close.left - (size + 6), m, size, size)
-        return close, restore
+        settings = pygame.Rect(restore.left - (size + 6), m, size, size)
+        return close, restore, settings
 
     def _draw_window_controls(self):
-        close_rect, restore_rect = self._window_control_rects()
+        close_rect, restore_rect, settings_rect = self._window_control_rects()
         if not hasattr(self, "_winctl_font"):
             self._winctl_font = pygame.font.SysFont("monospace", 16, bold=True)
 
         mouse = pygame.mouse.get_pos()
         for rect, glyph, hot in (
+            # ⚙ is a gear in DejaVu Sans, which pygame's SysFont finds
+            # everywhere this runs; the two beside it are box-drawing and
+            # multiplication, chosen for the same reason.
+            (settings_rect, "⚙", (150, 200, 140)),
             (restore_rect, "□", (90, 190, 255)),
             (close_rect, "×", (255, 80, 110)),
         ):
@@ -1924,12 +2109,17 @@ class ChibiAvatarApp:
 
     def _handle_window_control_click(self, pos):
         """Return True if the click was consumed by a window control."""
-        close_rect, restore_rect = self._window_control_rects()
+        close_rect, restore_rect, settings_rect = self._window_control_rects()
         if close_rect.collidepoint(pos):
             self.running = False
             return True
         if restore_rect.collidepoint(pos):
             self._toggle_fullscreen()
+            return True
+        if settings_rect.collidepoint(pos):
+            self.settings_open = not self.settings_open
+            self._settings_editing = False
+            self._settings_saved_at = 0.0
             return True
         return False
 
@@ -1998,6 +2188,16 @@ class ChibiAvatarApp:
                         self._handle_dream_view_key(event)
                     continue
 
+                # …and so does the settings panel. ⚠ BEFORE the general key
+                # handling below, where Escape quits the whole app and every
+                # printable character goes into the chat box: without this,
+                # typing a city name would talk to Chibi and the first Escape
+                # would close the window.
+                if self.settings_open:
+                    if event.type == pygame.KEYDOWN:
+                        self._handle_settings_key(event)
+                    continue
+
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         self.running = False
@@ -2011,6 +2211,12 @@ class ChibiAvatarApp:
                     elif event.key == pygame.K_F2:
                         # Open the dream journal viewer
                         self._open_dream_view()
+                    elif event.key == pygame.K_F3:
+                        # …and the settings panel, for the same reason F1 and
+                        # F2 exist: the gear is a small target on a screen
+                        # somebody may be looking at from across the room.
+                        self.settings_open = True
+                        self._settings_editing = False
                     elif self.state == AvatarState.ALARM:
                         # Any keypress dismisses alarm
                         self.alarm.dismiss()
@@ -2204,6 +2410,11 @@ class ChibiAvatarApp:
             # Dream journal viewer sits on top of everything else.
             if self.dream_view_open:
                 self._draw_dream_journal()
+
+            # …and the settings card above that, since the gear can be reached
+            # while the journal is open.
+            if self.settings_open:
+                self._draw_settings()
 
             # Window controls go above even the dream journal, so there is
             # always a visible way out.
