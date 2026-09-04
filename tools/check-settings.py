@@ -120,12 +120,13 @@ class FakeFeeds:
 
 
 app = types.SimpleNamespace(
-    config=Config(), feeds=FakeFeeds(),
+    config=Config(), feeds=FakeFeeds(), vision=None,
     _settings_index=0, _settings_editing=False, _settings_draft="",
     _settings_saved_at=0.0, _settings_error="", settings_open=True,
     SETTINGS_ROWS=chibi_main.ChibiAvatarApp.SETTINGS_ROWS,
 )
-for name in ("_settings_value", "_settings_apply", "_handle_settings_key"):
+for name in ("_settings_value", "_settings_apply", "_handle_settings_key",
+             "_set_vision"):
     setattr(app, name, getattr(chibi_main.ChibiAvatarApp, name).__get__(app))
 
 
@@ -162,6 +163,36 @@ key(pygame.K_DOWN)
 was = bool(app.config.weather_enabled)
 key(pygame.K_RETURN)
 check("the switch toggles", bool(app.config.weather_enabled) is not was)
+
+# ⛔ THE CAMERA SWITCH IS THE ONE THAT MUST ACT NOW. vision_enabled defaulted
+# to True with nothing on screen saying so and no way to turn it off but a
+# Python file — and a switch that needs a restart is not an answer to somebody
+# who wants the light off.
+while app.SETTINGS_ROWS[app._settings_index][0] != "vision_enabled":
+    key(pygame.K_DOWN)
+
+
+class FakeVision:
+    def __init__(self, released):
+        self.released = released
+        self.available = True
+        self.started = False
+
+    def start_awareness(self):
+        self.started = True
+
+    def stop(self):
+        self.released.append(True)
+
+
+released = []
+app.vision = FakeVision(released)
+app.config.vision_enabled = True
+key(pygame.K_RETURN)
+check("turning the camera off releases it there and then",
+      app.config.vision_enabled is False and app.vision is None and len(released) == 1)
+check("...and the setting is written, not only held in memory",
+      "vision_enabled = False" in open(path, encoding="utf-8").read())
 
 key(pygame.K_ESCAPE)
 check("Escape closes the panel when not typing", not app.settings_open)

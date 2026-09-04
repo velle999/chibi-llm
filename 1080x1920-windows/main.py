@@ -819,9 +819,16 @@ class ChibiAvatarApp:
     # A row that needed a restart to mean anything would be a row that reads as
     # broken, so there is not one.
     SETTINGS_ROWS = (
-        ("user_name",       "Your name",    "text"),
-        ("weather_city",    "Weather city", "text"),
-        ("weather_enabled", "Weather",      "bool"),
+        ("user_name",       "Your name",    "text", ""),
+        ("weather_city",    "Weather city", "text", ""),
+        ("weather_enabled", "Weather",      "bool", ""),
+        # ⛔ THE CAMERA HAD NO SWITCH AT ALL. vision_enabled defaults to True,
+        # nothing on screen said so, and the only way to turn it off was to
+        # edit a Python file — so a machine with a webcam had the light on and
+        # its owner had no way to work out why. It is the one setting here
+        # somebody may want in a hurry, and the note below says what it does.
+        ("vision_enabled",  "Camera",       "bool",
+         "Watches the room and tells Chibi what it sees"),
     )
 
     def _settings_value(self, key):
@@ -833,6 +840,9 @@ class ChibiAvatarApp:
             self.config.apply_user_name(value)
         else:
             setattr(self.config, key, value)
+
+        if key == "vision_enabled":
+            self._set_vision(bool(value))
 
         if key in ("weather_city", "weather_enabled") and self.feeds:
             # Ask for it again rather than showing the old city's weather for
@@ -850,10 +860,34 @@ class ChibiAvatarApp:
             print(f"[Settings] could not save: {e}")
             self._settings_error = str(e)
 
+    def _set_vision(self, on):
+        """Open or release the camera now, rather than at the next start.
+
+        ⛔ A CAMERA SWITCH THAT NEEDED A RESTART WOULD BE THE WRONG KIND OF
+        WRONG. Every other row here takes effect while running because a
+        setting that appears to do nothing reads as broken; this one is worse
+        than that — somebody turning it off wants the light off, and being told
+        to restart the program while it is still watching them is not an answer.
+        """
+        if on and self.vision is None:
+            v = Vision(self.config)
+            if v.available:
+                v.start_awareness()
+                self.vision = v
+            else:
+                # ⚠ THE SWITCH FOLLOWS THE CAMERA, not the other way round. No
+                # device, no vision — and the row goes back to Off rather than
+                # claiming On over a camera that never opened.
+                self.config.vision_enabled = False
+                self._settings_error = "no camera found"
+        elif not on and self.vision is not None:
+            self.vision.stop()
+            self.vision = None
+
     def _handle_settings_key(self, event):
         if event.type != pygame.KEYDOWN:
             return
-        key, label, kind = self.SETTINGS_ROWS[self._settings_index]
+        key, label, kind, _note = self.SETTINGS_ROWS[self._settings_index]
 
         if self._settings_editing:
             if event.key == pygame.K_RETURN:
@@ -911,7 +945,7 @@ class ChibiAvatarApp:
         self.screen.blit(title, (px + pad, py + pad))
 
         y = py + pad + 46
-        for i, (key, label, kind) in enumerate(self.SETTINGS_ROWS):
+        for i, (key, label, kind, _note) in enumerate(self.SETTINGS_ROWS):
             selected = (i == self._settings_index)
             if selected:
                 sel = pygame.Surface((pw - pad * 2 + 12, row_h - 6), pygame.SRCALPHA)
@@ -953,10 +987,15 @@ class ChibiAvatarApp:
         hs = self._set_small.render(hint, True, (150, 150, 168))
         self.screen.blit(hs, (px + pw // 2 - hs.get_width() // 2, py + ph - 40))
 
+        # ⚠ ONE LINE, THREE THINGS TO SAY, in the order they matter: what went
+        # wrong, then what was just saved, then what the selected row does. A
+        # row's note is the quiet case, so it never covers up a failed write.
         if getattr(self, "_settings_error", ""):
             note, note_colour = self._settings_error[:52], (255, 120, 120)
         elif time.time() < self._settings_saved_at:
             note, note_colour = "Saved to " + self.config.user_config_path(), (140, 200, 150)
+        elif self.SETTINGS_ROWS[self._settings_index][3] and not self._settings_editing:
+            note, note_colour = self.SETTINGS_ROWS[self._settings_index][3], (150, 150, 168)
         else:
             note, note_colour = "", None
         if note:
