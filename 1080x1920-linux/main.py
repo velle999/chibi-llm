@@ -822,11 +822,11 @@ class ChibiAvatarApp:
         ("user_name",       "Your name",    "text", ""),
         ("weather_city",    "Weather city", "text", ""),
         ("weather_enabled", "Weather",      "bool", ""),
-        # ⛔ THE CAMERA HAD NO SWITCH AT ALL. vision_enabled defaults to True,
+        # ⛔ THE CAMERA HAD NO SWITCH AT ALL, and it used to default to ON:
         # nothing on screen said so, and the only way to turn it off was to
         # edit a Python file — so a machine with a webcam had the light on and
-        # its owner had no way to work out why. It is the one setting here
-        # somebody may want in a hurry, and the note below says what it does.
+        # its owner had no way to work out why. It now defaults to OFF and this
+        # switch is how you turn it on; the note below says what it does.
         ("vision_enabled",  "Camera",       "bool",
          "Watches the room and tells Chibi what it sees"),
     )

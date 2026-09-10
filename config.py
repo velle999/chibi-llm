@@ -182,7 +182,10 @@ class Config:
     news_enabled: bool = True
 
     # ── Vision (PS3 Eye Webcam) ──────────────────────────────────────────
-    vision_enabled: bool = True
+    # Off by default: a camera should be something you switch ON deliberately,
+    # not something that is already watching the first time you launch. Turn it
+    # on in config.local.py or the settings gear.
+    vision_enabled: bool = False
     camera_device: int = 0             # /dev/video0 — change if needed
     camera_width: int = 320            # 320x240 is fine for LLM vision
     camera_height: int = 240
