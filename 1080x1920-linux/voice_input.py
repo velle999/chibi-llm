@@ -33,6 +33,10 @@ MIN_SPEECH_DURATION = 0.5     # Minimum seconds of speech to process
 MAX_SPEECH_DURATION = 30.0    # Maximum recording duration
 
 _BYTES_PER_SAMPLE = 2         # s16le
+# How fast the DC-offset estimate follows the signal, per chunk (~64ms). 0.1 is
+# a time constant of about 0.6s: quick enough to settle before anyone speaks,
+# slow enough that speech itself (which averages to zero) does not move it.
+_DC_ALPHA = 0.1
 
 # Whisper-tiny hallucinates these stock phrases on low-level noise / near-silence
 # (TV hum, fan, a cough). They're indistinguishable from real one-word replies by
@@ -179,6 +183,7 @@ class VoiceInput:
         self.min_speech_duration = min_speech_duration
         self.model = None
         self._proc = None
+        self._dc = None   # running DC-offset estimate, see _read_chunk()
 
         # Optional wake-word engine (experimental; config oww_enabled)
         self._oww = None
@@ -275,6 +280,7 @@ class VoiceInput:
                 "or pipewire (pw-record)"
             )
         print(f"[Voice] Capturing audio via {name}")
+        self._dc = None   # a new stream can sit at a different offset
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -295,7 +301,19 @@ class VoiceInput:
             self._proc = None
 
     def _read_chunk(self) -> np.ndarray | None:
-        """Read exactly CHUNK samples of int16 PCM, or None on EOF/death."""
+        """Read exactly CHUNK samples of int16 PCM, or None on EOF/death.
+
+        The chunk comes back with its DC offset removed. Some microphones sit
+        far from zero: a ThinkPad's AMD digital mic idles at about +6900 of
+        32768 in a silent room. That is inaudible, so the mic "tests fine"
+        everywhere, but the silence check below measures mean |amplitude| and
+        read that offset as constant speech. Every chunk was over the
+        threshold, a capture never ended on silence, and dictation timed out
+        with "heard nothing". Browsers and chat apps strip DC in their own
+        processing, which is why only this path failed. Doing it here means
+        the silence check, the wake-word engine and Whisper all see the same
+        centred audio.
+        """
         want = CHUNK * _BYTES_PER_SAMPLE
         buf = b""
         while len(buf) < want:
@@ -303,7 +321,10 @@ class VoiceInput:
             if not part:
                 return None  # recorder exited / EOF
             buf += part
-        return np.frombuffer(buf, dtype=np.int16)
+        raw = np.frombuffer(buf, dtype=np.int16).astype(np.int32)
+        mean = float(raw.mean())
+        self._dc = mean if self._dc is None else self._dc + _DC_ALPHA * (mean - self._dc)
+        return np.clip(raw - int(round(self._dc)), -32768, 32767).astype(np.int16)
 
     def start_listening(self):
         """Start the voice listening loop in a background thread."""
