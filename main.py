@@ -1877,7 +1877,10 @@ class ChibiAvatarApp:
         brainlog_bridge.mark_asked()
         self._brainlog_awaiting = True
         self._brainlog_asked_at = time.time()
-        self.bubble.set_text(question)
+        # The hint is shown, not spoken: it is the same every night, and the
+        # question should not have a procedure read out after it.
+        wake = getattr(self.config, "wake_word", "computer")
+        self.bubble.set_text(f"{question}\n\n(say \"{wake}\" to answer)")
         if self.voice_out:
             self.voice_out.speak_now(question)
         # Open the ear: the answer arrives unaddressed, right after this.
@@ -1886,8 +1889,46 @@ class ChibiAvatarApp:
             self.set_state(AvatarState.IDLE)
         print(f"[brainlog] asked: {question!r}")
 
+    def _strip_address(self, text):
+        """Drop the leading name or wake word from an answer.
+
+        "Computer, the smell of sawdust" becomes "the smell of sawdust". Only
+        a LEADING address is removed: the same word later in the sentence is
+        part of what was said, and the body of an entry is stored verbatim.
+        """
+        wake = getattr(self.config, "wake_word", "computer").lower().strip()
+        out = text.strip()
+        for _ in range(3):      # "computer, chibi, ..."
+            m = re.match(r"^\s*([A-Za-z']+)\s*[,.:;!?\-]*\s*", out)
+            if not m:
+                break
+            w = m.group(1).lower()
+            near = (len(w) >= 4 and wake
+                    and difflib.SequenceMatcher(None, w, wake).ratio() >= 0.8)
+            if w == wake or _sounds_like_chibi(w) or near:
+                out = out[m.end():]
+                continue
+            break
+        return out.strip()
+
     def _take_brainlog_answer(self, text):
-        """Hand what was heard to brainlog, and say so."""
+        """Hand what was heard to brainlog, and say so.
+
+        ⛔ ONLY REACHED FOR SPEECH THAT NAMED HER. The first version took the
+        next thing transcribed, whatever it was, because an answer does not
+        normally carry her name. In a room with a video playing that filed the
+        narration — "they used low-poly textures for stuff in the distance" —
+        as that evening's memory, under a question nobody had answered. A
+        wrong entry is worse here than a missing one: the whole point is an
+        archive that can be trusted years later, by someone with no way left
+        to check it.
+        """
+        text = self._strip_address(text)
+        # Nothing but her name is an attention call, not an answer. Keep
+        # waiting rather than filing two words.
+        if len(text) < 12 or len(text.split()) < 3:
+            print(f"[brainlog] addressed but no answer in it: {text!r}")
+            return
         self._brainlog_awaiting = False
         self._brainlog_asked_at = 0.0
         print(f"[brainlog] answer: {text!r}")
@@ -2040,7 +2081,8 @@ class ChibiAvatarApp:
                 # An answer to "is there a meal you remember?" does not contain
                 # chibi's name, so it MUST be taken before the addressed-check
                 # below, which would drop it as ambient chatter.
-                if self._brainlog_awaiting:
+                if (self._brainlog_awaiting
+                        and self._voice_names_chibi(transcription)):
                     self._take_brainlog_answer(transcription)
                 elif self._voice_is_addressed(transcription):
                     print(f"[Voice] Heard: {transcription!r}")
