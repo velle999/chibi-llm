@@ -2156,33 +2156,49 @@ class ChibiAvatarApp:
         self.particles.update(dt)
         self.bubble.update(dt)
         self.input_box.update(dt)
+        self._update_weather(dt)
 
+    def _update_weather(self, dt):
         # Weather-reactive particles
         weather = self.feeds.get_weather()
         w_cond = weather.condition.lower()
         import random
 
-        if w_cond in ("rain", "drizzle", "shower") and random.random() < 0.4:
-            # Rain drops falling
-            rx = random.randint(0, self.config.window_width)
-            self.weather_particles.append({
-                'x': rx, 'y': 0,
-                'vx': random.uniform(-0.5, 0.5),
-                'vy': random.uniform(4, 8),
-                'life': 1.0,
-                'type': 'rain',
-            })
+        # ⛔ ALL OF THIS WAS TUNED ON THE PI'S 800x480 PANEL, and every number
+        # in it used to be a Pi number. A drop lived two seconds whatever the
+        # window, so at 4-8 px a frame rain gave out ~400 px down — the whole
+        # Pi screen, a third of a 1080p one, which is where it visibly stopped.
+        # Snow was worse at 0.5-2 px a frame: it melted ~100 px from the top on
+        # every screen, the Pi's included. A particle now lives until it leaves
+        # the window, and the rate and speed follow the window's size, with the
+        # Pi panel as the unit so the Pi looks exactly as it did.
+        w, h = self.config.window_width, self.config.window_height
+        density = max(1.0, w / 800)             # the same rain per inch of width
+        fall = max(1.0, (h / 480) ** 0.5)       # a tall screen falls a bit faster
 
-        elif w_cond in ("snow", "sleet") and random.random() < 0.3:
-            rx = random.randint(0, self.config.window_width)
-            self.weather_particles.append({
-                'x': rx, 'y': 0,
-                'vx': random.uniform(-1, 1),
-                'vy': random.uniform(0.5, 2),
-                'life': 1.0,
-                'type': 'snow',
-                'size': random.uniform(2, 5),
-            })
+        def spawn_count(rate):
+            n = int(rate)
+            return n + (1 if random.random() < rate - n else 0)
+
+        if w_cond in ("rain", "drizzle", "shower"):
+            # Rain drops falling
+            for _ in range(spawn_count(0.4 * density)):
+                self.weather_particles.append({
+                    'x': random.randint(0, w), 'y': 0,
+                    'vx': random.uniform(-0.5, 0.5),
+                    'vy': random.uniform(4, 8) * fall,
+                    'type': 'rain',
+                })
+
+        elif w_cond in ("snow", "sleet"):
+            for _ in range(spawn_count(0.3 * density)):
+                self.weather_particles.append({
+                    'x': random.randint(0, w), 'y': 0,
+                    'vx': random.uniform(-1, 1),
+                    'vy': random.uniform(0.5, 2) * fall,
+                    'type': 'snow',
+                    'size': random.uniform(2, 5),
+                })
 
         elif w_cond in ("storm", "thunderstorm") and random.random() < 0.003:
             # Lightning flash
@@ -2193,10 +2209,12 @@ class ChibiAvatarApp:
         for wp in self.weather_particles:
             wp['x'] += wp['vx']
             wp['y'] += wp['vy']
-            wp['life'] -= dt * 0.5
-            if wp['y'] < self.config.window_height and wp['life'] > 0:
+            if wp['y'] < h:
                 new_wp.append(wp)
-        self.weather_particles = new_wp[:300]  # cap particle count
+        # Cap the count, scaled by area: a flat 300 was a Pi-sized ceiling that
+        # would have thinned snow out across a desktop monitor.
+        cap = int(300 * max(1.0, (w * h) / (800 * 480)))
+        self.weather_particles = new_wp[:cap]
 
         # Update lightning
         if self.lightning_flash > 0:
@@ -2264,9 +2282,9 @@ class ChibiAvatarApp:
             pygame.draw.circle(self.screen, color, (star['x'], star['y']), size)
 
         # Draw weather particles
+        h = self.config.window_height
         for wp in self.weather_particles:
             if wp['type'] == 'rain':
-                alpha = int(150 * wp['life'])
                 pygame.draw.line(
                     self.screen, (100, 150, 255),
                     (int(wp['x']), int(wp['y'])),
@@ -2274,12 +2292,24 @@ class ChibiAvatarApp:
                     1,
                 )
             elif wp['type'] == 'snow':
-                alpha = int(200 * wp['life'])
-                size = max(1, int(wp.get('size', 3) * wp['life']))
-                snow_surf = pygame.Surface((size * 2 + 2, size * 2 + 2), pygame.SRCALPHA)
-                pygame.draw.circle(snow_surf, (220, 230, 255, alpha),
-                                   (size + 1, size + 1), size)
-                self.screen.blit(snow_surf, (int(wp['x']) - size, int(wp['y']) - size))
+                size = max(1, int(wp.get('size', 3)))
+                flake = self._snowflake(size)
+                # Melt over the last stretch rather than vanish at the edge.
+                fade = min(1.0, (h - wp['y']) / (h * 0.15))
+                flake.set_alpha(int(255 * max(0.0, fade)))
+                self.screen.blit(flake, (int(wp['x']) - size, int(wp['y']) - size))
+
+    def _snowflake(self, size):
+        """One flake per size, drawn once. A desktop monitor keeps several
+        hundred flakes in the air, and a fresh surface for each one every frame
+        was an allocation per flake per frame."""
+        cache = self.__dict__.setdefault("_snowflakes", {})
+        flake = cache.get(size)
+        if flake is None:
+            flake = pygame.Surface((size * 2 + 2, size * 2 + 2), pygame.SRCALPHA)
+            pygame.draw.circle(flake, (220, 230, 255, 200), (size + 1, size + 1), size)
+            cache[size] = flake
+        return flake
 
     # --- Window controls -------------------------------------------------
     #
