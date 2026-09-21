@@ -219,6 +219,18 @@ class Config:
     # Minimum seconds between spoken impulses. Impulses only fire while idle
     # — never during an alarm, Thoth mode, generation, or speech.
     impulse_min_interval: float = 300.0
+
+    # ── brainlog: one question a day, asked out loud ─────────────────────
+    # Chibi asks; brainlog owns the archive (see brainlog_bridge.py). Off on
+    # a machine without the `brainlog` command, which is the right answer
+    # rather than an error — the Pi may not carry the archive.
+    brainlog_enabled: bool = True
+    # "At or after", checked about once a minute, once per day. A question
+    # that only fires in a one-minute window is one that mostly never fires.
+    brainlog_hour: int = 20
+    brainlog_minute: int = 0
+    # Ask about people and practicalities instead of memories.
+    brainlog_roster: bool = False
     # Screen awareness: periodic screenshot → vision model. OFF by default,
     # and pointless on the Pi kiosk (it would only see Chibi herself) —
     # meant for a desktop machine. Needs scrot/maim (X11) plus Pillow.

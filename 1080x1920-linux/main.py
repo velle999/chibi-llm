@@ -38,6 +38,7 @@ from soul import Soul
 from thoth import ThothCorpus
 from secfeed import SecFeed
 from vision import Vision, is_vision_request
+import brainlog_bridge
 from alarm import (AlarmManager, is_alarm_request, is_dismiss_word,
                    is_snooze_word, parse_alarm_time, parse_alarm_repeat,
                    align_to_repeat_days, describe_repeat_days)
@@ -488,6 +489,10 @@ class ChibiAvatarApp:
         # Alarm
         self.alarm = AlarmManager(self.config)
         self._alarm_speak_timer = 0
+        # brainlog's daily question: a timer, and a flag saying the next thing
+        # heard is an answer rather than a remark addressed to chibi.
+        self._brainlog_timer = 0.0
+        self._brainlog_awaiting = False
 
         # Horus / Thoth mode
         self.horus_mode = False
@@ -1783,6 +1788,65 @@ class ChibiAvatarApp:
             if not self.is_generating:
                 self.set_state(AvatarState.IDLE)
 
+    def _check_brainlog_question(self):
+        """Once a minute: is today's question due? If so, start fetching it.
+
+        Fetching runs a model and takes seconds, so it happens on a thread in
+        brainlog_bridge and this only ever asks for it.
+        """
+        if not getattr(self.config, "brainlog_enabled", True):
+            return
+        if self._brainlog_awaiting or self.horus_mode or self.security_mode:
+            return
+        if brainlog_bridge.due(getattr(self.config, "brainlog_hour", 20),
+                               getattr(self.config, "brainlog_minute", 0)):
+            brainlog_bridge.request_question(
+                getattr(self.config, "brainlog_roster", False))
+
+    def _deliver_brainlog_question(self):
+        """Speak the question once it is ready and chibi is free to ask it.
+
+        Deliberately fussy about WHEN: interrupting an alarm, a generation or
+        her own speech to ask about someone's childhood would be worse than
+        waiting. The question keeps until the next frame that is quiet.
+        """
+        if self._brainlog_awaiting or self.is_generating:
+            return
+        if self.state in (AvatarState.ALARM, AvatarState.THINKING):
+            return
+        if self.voice_out and self.voice_out.busy:
+            return
+        question = brainlog_bridge.take_question()
+        if not question:
+            return
+
+        brainlog_bridge.mark_asked()
+        self._brainlog_awaiting = True
+        self.bubble.set_text(question)
+        if self.voice_out:
+            self.voice_out.speak_now(question)
+        # Open the ear: the answer arrives unaddressed, right after this.
+        self._open_wake_window()
+        if self.state == AvatarState.SLEEPING:
+            self.set_state(AvatarState.IDLE)
+        print(f"[brainlog] asked: {question!r}")
+
+    def _take_brainlog_answer(self, text):
+        """Hand what was heard to brainlog, and say so."""
+        self._brainlog_awaiting = False
+        print(f"[brainlog] answer: {text!r}")
+
+        def done(ok, title):
+            print(f"[brainlog] {'saved ' + title if ok else 'could not save'}")
+
+        brainlog_bridge.file_answer(
+            text, getattr(self.config, "brainlog_roster", False), on_done=done)
+        reply = "I'll remember that."
+        self.bubble.set_text(reply)
+        if self.voice_out:
+            self.voice_out.speak_now(reply)
+        self.set_state(AvatarState.HAPPY)
+
     def update(self, dt):
         self.state_timer += dt
 
@@ -1791,6 +1855,13 @@ class ChibiAvatarApp:
         if self._horus_check_timer >= 60.0:
             self._horus_check_timer = 0.0
             self._check_horus_threshold()
+
+        # ── brainlog: today's question ───────────────────────────────────
+        self._brainlog_timer += dt
+        if self._brainlog_timer >= 60.0:
+            self._brainlog_timer = 0.0
+            self._check_brainlog_question()
+        self._deliver_brainlog_question()
 
         # Sentinel: narrate verdicts that landed since the last frame.
         self._announce_security_events()
@@ -1883,7 +1954,12 @@ class ChibiAvatarApp:
 
             transcription = self.voice_in.get_transcription()
             if transcription:
-                if self._voice_is_addressed(transcription):
+                # An answer to "is there a meal you remember?" does not contain
+                # chibi's name, so it MUST be taken before the addressed-check
+                # below, which would drop it as ambient chatter.
+                if self._brainlog_awaiting:
+                    self._take_brainlog_answer(transcription)
+                elif self._voice_is_addressed(transcription):
                     print(f"[Voice] Heard: {transcription!r}")
                     self.send_message(transcription)
                 else:
