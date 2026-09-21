@@ -27,6 +27,7 @@ SHARED=(
     chat_bubble.py
     config.py
     data_feeds.py
+    icons.py
     llm_client.py
     main.py
     secfeed.py

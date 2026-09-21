@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from llm_client import LLMClient
 from sprite_renderer import ChibiRenderer
 from chat_bubble import ChatBubble
+import icons
 from buddy import BuddyLink
 from voice_input import VoiceInput
 from voice_output import VoiceOutput
@@ -259,22 +260,23 @@ class StatusBar:
         text_surf = self.font.render(status_text, True, dot_color)
         surface.blit(text_surf, (14, clock_bottom + 4 + date_surf.get_height()))
 
-        # Voice indicators (center)
+        # Voice indicators (center). Drawn icons, not 🎙/🔊 — the font has
+        # neither; see icons.py.
         voice_parts = []
         if voice_in:
             if voice_in.is_recording:
-                voice_parts.append(("🎙 REC", (255, 80, 80)))
+                voice_parts.append(("mic", "REC", (255, 80, 80)))
             elif voice_in.is_listening:
-                voice_parts.append(("🎙 ON", (0, 255, 100)))
+                voice_parts.append(("mic", "ON", (0, 255, 100)))
             else:
-                voice_parts.append(("🎙 OFF", (100, 100, 100)))
+                voice_parts.append(("mic", "OFF", (100, 100, 100)))
 
         if voice_out and voice_out.is_speaking:
-            voice_parts.append(("🔊", (0, 200, 255)))
+            voice_parts.append(("speaker", "", (0, 200, 255)))
 
         x_offset = w // 2 - 60
-        for label, color in voice_parts:
-            vs = self.font.render(label, True, color)
+        for name, label, color in voice_parts:
+            vs = icons.label(self.font, name, label, color)
             surface.blit(vs, (x_offset, 8))
             x_offset += vs.get_width() + 16
 

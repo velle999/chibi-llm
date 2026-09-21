@@ -8,6 +8,7 @@ import math
 import time
 from data_feeds import WeatherData, MarketData, MarketTicker
 from config import Config
+import icons
 
 
 class WeatherOverlay:
@@ -23,25 +24,6 @@ class WeatherOverlay:
         if not self.font_large:
             self.font_large = pygame.font.SysFont("monospace", 40, bold=True)
             self.font_small = pygame.font.SysFont("monospace", 18)
-
-    def _get_weather_symbol(self, condition: str) -> str:
-        """Map weather condition to unicode/ASCII art symbol."""
-        symbols = {
-            "clear": "☀",
-            "sunny": "☀",
-            "clouds": "☁",
-            "overcast": "☁",
-            "rain": "🌧",
-            "drizzle": "🌦",
-            "shower": "🌧",
-            "snow": "❄",
-            "sleet": "🌨",
-            "storm": "⚡",
-            "thunderstorm": "⚡",
-            "mist": "🌫",
-            "fog": "🌫",
-        }
-        return symbols.get(condition.lower(), "?")
 
     def draw(self, surface, weather: WeatherData, t: float):
         if not weather.city:
@@ -79,25 +61,36 @@ class WeatherOverlay:
         temp_surf = self.font_large.render(temp_text, True, (230, 240, 255))
         panel.blit(temp_surf, (12, 8))
 
-        # Weather symbol
-        symbol = self._get_weather_symbol(weather.condition)
-        sym_surf = self.font_large.render(symbol, True, (255, 255, 255))
-        panel.blit(sym_surf, (box_w - sym_surf.get_width() - 12, 6))
+        # Weather icon, as tall as the temperature beside it. Drawn rather than
+        # a character: see icons.py for why the emoji came out as empty boxes.
+        icon = icons.weather(weather.condition, temp_surf.get_height())
+        if icon is None:
+            icon = self.font_large.render("?", True, (255, 255, 255))
+        panel.blit(icon, (box_w - icon.get_width() - 12, 8))
+
+        # ⚠ EACH LINE GOES UNDER THE ONE ABOVE BY MEASURING IT. These were
+        # fixed offsets that fit the Pi's small fonts; with the desktop's
+        # bigger ones the description ran into the temperature, and the
+        # timestamp hung out of the bottom of the panel.
+        y = 8 + temp_surf.get_height()
 
         # Description
         desc = weather.description[:22]
         desc_surf = self.font_small.render(desc, True, (160, 180, 200))
-        panel.blit(desc_surf, (12, 42))
+        panel.blit(desc_surf, (12, y))
+        y += desc_surf.get_height() + 2
 
         # Humidity + wind
-        detail = f"💧{weather.humidity}%  🌬{weather.wind_speed:.0f}mph"
-        detail_surf = self.font_small.render(detail, True, (120, 140, 160))
-        panel.blit(detail_surf, (12, 58))
+        detail_color = (120, 140, 160)
+        hum = icons.label(self.font_small, "drop", f"{weather.humidity}%", detail_color)
+        wind = icons.label(self.font_small, "wind", f"{weather.wind_speed:.0f}mph", detail_color)
+        panel.blit(hum, (12, y))
+        panel.blit(wind, (12 + hum.get_width() + self.font_small.size("  ")[0], y))
 
         # Updated time
         if weather.updated_at:
             upd = self.font_small.render(f"@{weather.updated_at}", True, (60, 70, 80))
-            panel.blit(upd, (box_w - upd.get_width() - 8, box_h - 16))
+            panel.blit(upd, (box_w - upd.get_width() - 8, box_h - upd.get_height() - 4))
 
         surface.blit(panel, (bx, by))
 

@@ -29,6 +29,7 @@ class ChatBubble:
         self.serial = 0
         self._layout_key = None
         self._layout = None
+        self._drawable = {}         # char -> does the font have it
 
     def init_font(self):
         self.font = pygame.font.SysFont("monospace", self.config.bubble_font_size)
@@ -85,7 +86,8 @@ class ChatBubble:
             self.init_font()
 
         max_w = self.config.bubble_max_width
-        wrapped = textwrap.wrap(self.text, width=max_w // (self.config.bubble_font_size * 0.6))
+        wrapped = textwrap.wrap(self._drawable_text(self.text),
+                                width=max_w // (self.config.bubble_font_size * 0.6))
         layout = None
         if wrapped:
             line_surfs = [self.font.render(line, True, self.config.bubble_text_color) for line in wrapped]
@@ -95,6 +97,23 @@ class ChatBubble:
             layout = (line_surfs, max_line_w + pad * 2, total_h + pad * 2)
         self._layout_key, self._layout = key, layout
         return layout
+
+    def _drawable_text(self, text):
+        """The text without the characters the font cannot draw. The prompt
+        asks for :3-style emoticons, but a model still puts emoji in, and the
+        monospace font draws each one as an empty box."""
+        out = []
+        for c in text:
+            if ord(c) < 128:
+                out.append(c)
+                continue
+            ok = self._drawable.get(c)
+            if ok is None:
+                metrics = self.font.metrics(c)
+                ok = self._drawable[c] = bool(metrics) and metrics[0] is not None
+            if ok:
+                out.append(c)
+        return "".join(out)
 
     def size(self):
         """(width, height) of what render() would return, tail included."""
