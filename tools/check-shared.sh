@@ -23,6 +23,8 @@ cd "$(dirname "$0")/.." || exit 2
 SHARED=(
     assistant_bridge.py
     brainlog_bridge.py
+    buddy.py
+    chat_bubble.py
     config.py
     data_feeds.py
     llm_client.py

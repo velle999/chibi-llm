@@ -6,6 +6,7 @@ Displays a cute chibi avatar that reacts to conversation state.
 """
 
 import pygame
+import os
 import sys
 import math
 import time
@@ -13,7 +14,6 @@ import threading
 import json
 import re
 import difflib
-import textwrap
 from enum import Enum, auto
 
 # Line-buffer stdout/stderr so logs flush promptly to ~/chibi.log on the Pi
@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 
 from llm_client import LLMClient
 from sprite_renderer import ChibiRenderer
+from chat_bubble import ChatBubble
+from buddy import BuddyLink
 from voice_input import VoiceInput
 from voice_output import VoiceOutput
 from data_feeds import DataFeedManager
@@ -155,95 +157,6 @@ class ParticleSystem:
                 surface.blit(glow_surf, (pos[0] - size * 2, pos[1] - size * 2))
             pygame.draw.circle(surface, color, pos, size)
 
-# ─── Chat Bubble ─────────────────────────────────────────────────────────────
-
-class ChatBubble:
-    def __init__(self, config: Config):
-        self.config = config
-        self.text = ""
-        self.target_text = ""
-        self.char_index = 0
-        self.char_timer = 0
-        self.visible = False
-        self.alpha = 0
-        self.font = None
-
-    def init_font(self):
-        self.font = pygame.font.SysFont("monospace", self.config.bubble_font_size)
-
-    def set_text(self, text: str):
-        self.target_text = text
-        self.char_index = 0
-        self.text = ""
-        self.visible = True
-
-    def hide(self):
-        self.visible = False
-        self.text = ""
-        self.target_text = ""
-
-    def update(self, dt):
-        if self.visible:
-            self.alpha = min(255, self.alpha + dt * 600)
-            # Typewriter effect
-            self.char_timer += dt
-            if self.char_timer > 0.03 and self.char_index < len(self.target_text):
-                self.char_index += 1
-                self.text = self.target_text[:self.char_index]
-                self.char_timer = 0
-        else:
-            self.alpha = max(0, self.alpha - dt * 400)
-
-    def draw(self, surface, cx, top_y):
-        if self.alpha <= 0 or not self.text:
-            return
-
-        if not self.font:
-            self.init_font()
-
-        max_w = self.config.bubble_max_width
-        wrapped = textwrap.wrap(self.text, width=max_w // (self.config.bubble_font_size * 0.6))
-        if not wrapped:
-            return
-
-        line_surfs = [self.font.render(line, True, self.config.bubble_text_color) for line in wrapped]
-        total_h = sum(s.get_height() for s in line_surfs) + 8 * len(line_surfs)
-        max_line_w = max(s.get_width() for s in line_surfs)
-
-        pad = 16
-        bw = max_line_w + pad * 2
-        bh = total_h + pad * 2
-
-        bx = cx - bw // 2
-        by = top_y - bh - 20
-
-        # Bubble background
-        bubble_surf = pygame.Surface((bw, bh), pygame.SRCALPHA)
-        bg = (*self.config.bubble_bg_color, int(self.alpha * 0.85))
-        pygame.draw.rect(bubble_surf, bg, (0, 0, bw, bh), border_radius=12)
-
-        # Border glow
-        border_color = (*self.config.neon_primary, int(self.alpha * 0.6))
-        pygame.draw.rect(bubble_surf, border_color, (0, 0, bw, bh), width=2, border_radius=12)
-
-        # Draw text
-        y_offset = pad
-        for ls in line_surfs:
-            bubble_surf.blit(ls, (pad, y_offset))
-            y_offset += ls.get_height() + 8
-
-        surface.blit(bubble_surf, (bx, by))
-
-        # Speech tail
-        tail_points = [
-            (cx - 8, by + bh),
-            (cx + 8, by + bh),
-            (cx, by + bh + 12),
-        ]
-        tail_surf = pygame.Surface((surface.get_width(), surface.get_height()), pygame.SRCALPHA)
-        pygame.draw.polygon(tail_surf, bg, tail_points)
-        surface.blit(tail_surf, (0, 0))
-
 # ─── Input Box ───────────────────────────────────────────────────────────────
 
 class InputBox:
@@ -368,10 +281,12 @@ class StatusBar:
         # Server info (top-right, below weather panel area)
         server_text = f"{self.config.llm_host}:{self.config.llm_port}"
         server_surf = self.font.render(server_text, True, (40, 45, 55))
-        surface.blit(server_surf, (w - server_surf.get_width() - 12, 8))
+        # Left of the window controls (four 26 px buttons from the corner),
+        # which used to be drawn straight over it.
+        surface.blit(server_surf, (w - server_surf.get_width() - 146, 14))
 
         # Controls hint
-        hint = self.font.render("[F1] mic  [F11] window  [ESC] quit", True, (35, 35, 50))
+        hint = self.font.render("[F1] mic  [F4] go play  [F11] window  [ESC] quit", True, (35, 35, 50))
         surface.blit(hint, (12, surface.get_height() - 18))
 
 # ─── Main App ────────────────────────────────────────────────────────────────
@@ -409,6 +324,8 @@ class ChibiAvatarApp:
         self.bubble = ChatBubble(self.config)
         self.input_box = InputBox(self.config)
         self.status_bar = StatusBar(self.config)
+        # Chibi loose on the desktop — see buddy.py.
+        self.buddy = BuddyLink(self.config)
         self.llm = LLMClient(self.config)
         # Background ping so the status dot stays honest between messages
         self.llm.start_health_check()
@@ -2323,13 +2240,13 @@ class ChibiAvatarApp:
     _WINCTL_MARGIN = 10
 
     def _window_control_rects(self):
-        """Return (close_rect, restore_rect, settings_rect), laid out top-right.
+        """Return (close, restore, settings, buddy) rects, laid out top-right.
 
         Right to left, in the order they are reached for: close on the corner,
-        the fullscreen toggle beside it, then the gear. The gear goes on the
-        FAR side deliberately — it is the one of the three that is not a way of
-        getting rid of the window, and a settings panel opened by a hand aiming
-        for close is a settings panel nobody asked for.
+        the fullscreen toggle beside it, then the gear, then the buddy's star.
+        The gear and the star go on the FAR side deliberately — neither is a
+        way of getting rid of the window, and a settings panel opened by a hand
+        aiming for close is a settings panel nobody asked for.
         """
         size = self._WINCTL_SIZE
         m = self._WINCTL_MARGIN
@@ -2337,18 +2254,20 @@ class ChibiAvatarApp:
         close = pygame.Rect(w - m - size, m, size, size)
         restore = pygame.Rect(close.left - (size + 6), m, size, size)
         settings = pygame.Rect(restore.left - (size + 6), m, size, size)
-        return close, restore, settings
+        buddy = pygame.Rect(settings.left - (size + 6), m, size, size)
+        return close, restore, settings, buddy
 
     def _draw_window_controls(self):
-        close_rect, restore_rect, settings_rect = self._window_control_rects()
+        close_rect, restore_rect, settings_rect, buddy_rect = self._window_control_rects()
         if not hasattr(self, "_winctl_font"):
             self._winctl_font = pygame.font.SysFont("monospace", 16, bold=True)
 
         mouse = pygame.mouse.get_pos()
         for rect, glyph, hot in (
             # ⚙ is a gear in DejaVu Sans, which pygame's SysFont finds
-            # everywhere this runs; the two beside it are box-drawing and
-            # multiplication, chosen for the same reason.
+            # everywhere this runs; the others are a dingbat star, box-drawing
+            # and multiplication, chosen for the same reason.
+            (buddy_rect, "✦", (255, 120, 220)),
             (settings_rect, "⚙", (150, 200, 140)),
             (restore_rect, "□", (90, 190, 255)),
             (close_rect, "×", (255, 80, 110)),
@@ -2360,6 +2279,16 @@ class ChibiAvatarApp:
             pygame.draw.rect(self.screen, hot, rect, 1, border_radius=5)
             surf = self._winctl_font.render(glyph, True, fg)
             self.screen.blit(surf, surf.get_rect(center=rect.center))
+
+        # A star says nothing on its own, so it says what it does when the
+        # pointer is on it.
+        if buddy_rect.collidepoint(mouse):
+            if not hasattr(self, "_winctl_hint_font"):
+                self._winctl_hint_font = pygame.font.SysFont("monospace", 13)
+            tip = self._winctl_hint_font.render("go play on the desktop  [F4]", True,
+                                                (255, 120, 220))
+            self.screen.blit(tip, (buddy_rect.right - tip.get_width(),
+                                   buddy_rect.bottom + 6))
 
     def _toggle_fullscreen(self):
         """Flip between fullscreen and a normal window.
@@ -2380,7 +2309,10 @@ class ChibiAvatarApp:
 
     def _handle_window_control_click(self, pos):
         """Return True if the click was consumed by a window control."""
-        close_rect, restore_rect, settings_rect = self._window_control_rects()
+        close_rect, restore_rect, settings_rect, buddy_rect = self._window_control_rects()
+        if buddy_rect.collidepoint(pos):
+            self._buddy_out()
+            return True
         if close_rect.collidepoint(pos):
             self.running = False
             return True
@@ -2394,7 +2326,108 @@ class ChibiAvatarApp:
             return True
         return False
 
+    # --- Buddy mode ------------------------------------------------------
+    #
+    # Chibi out of her window, loose on the desktop. buddy.py draws her there
+    # in a process of its own; everything she thinks and says still happens
+    # here, and this is where the two meet.
+
+    def _buddy_out(self):
+        if self.buddy.running:
+            return
+        reason = BuddyLink.unavailable_reason()
+        if reason:
+            print(f"[Buddy] {reason}")
+            self.bubble.set_text(reason)
+            return
+        print("[Buddy] going out to play")
+        self.buddy.start(os.getpid())
+
+    def _set_window_shown(self, shown):
+        """Hide the window while she is out, and bring it back when she is
+        home. SDL can hide a window without destroying it, so every surface
+        and font made for it is still good when it comes back.
+
+        ⛔ ONE Window wrapper, kept for the life of the app. from_display_module()
+        stores the Python object in the SDL window's own data, and pygame looks
+        it up again for every event that names the window. A wrapper made per
+        call was garbage-collected straight away, leaving a dangling pointer
+        there, and the next key or focus event handed pygame freed memory: a
+        segfault a few seconds after she came home, reliably once a
+        conversation had churned the heap enough to reuse it."""
+        try:
+            win = getattr(self, "_sdl_window", None)
+            if win is None:
+                from pygame._sdl2.video import Window
+                win = self._sdl_window = Window.from_display_module()
+            if shown:
+                win.show()
+                win.focus()
+            else:
+                win.hide()
+        except Exception as e:
+            print(f"[Buddy] could not {'show' if shown else 'hide'} the window: {e}")
+            if not shown:
+                pygame.display.iconify()
+
+    def _buddy_came_home(self):
+        if self.buddy.out:
+            self.buddy.out = False
+            self._set_window_shown(True)
+
+    def _pump_buddy(self):
+        """Once a frame: what happened to her out there, and what she is
+        doing in here that she should be doing out there too."""
+        for ev in self.buddy.poll():
+            kind = ev.get("ev")
+            if kind == "ready":
+                self.buddy.out = True
+                self._set_window_shown(False)
+            elif kind == "error":
+                reason = ev.get("reason", "I couldn't go out to play.")
+                print(f"[Buddy] {reason}")
+                self.bubble.set_text(reason)
+            elif kind == "pet":
+                self.last_interaction = time.time()
+                if self.state in (AvatarState.IDLE, AvatarState.SLEEPING,
+                                  AvatarState.HAPPY):
+                    self.set_state(AvatarState.HAPPY)
+            elif kind == "talking":
+                # The talk box is open: somebody is right there.
+                self.last_interaction = time.time()
+                if self.state == AvatarState.SLEEPING:
+                    self.set_state(AvatarState.IDLE)
+            elif kind == "talk":
+                text = (ev.get("text") or "").strip()
+                if text and not self.is_generating:
+                    # Typed, so unmistakably the person — as in the window.
+                    self._unaddressed_streak = 0
+                    self.send_message(text)
+            elif kind == "mic":
+                if self.voice_in:
+                    if self.voice_in.is_listening:
+                        self.voice_in.stop_listening()
+                    else:
+                        self.voice_in.start_listening()
+            elif kind == "quit":
+                self.running = False
+            elif kind in ("home", "exited"):
+                if kind == "exited" and ev.get("code") and not self.buddy.out:
+                    print(f"[Buddy] helper exited with status {ev.get('code')}")
+                self._buddy_came_home()
+
+        if self.buddy.running:
+            self.buddy.sync(
+                state=self.state.name,
+                horus=self.horus_mode,
+                speaking=bool(self.voice_out and self.voice_out.busy),
+                bubble=[self.bubble.serial,
+                        self.bubble.target_text if self.bubble.visible else ""],
+            )
+
     def run(self):
+        if "--buddy" in sys.argv[1:]:
+            self._buddy_out()
         while self.running:
             dt = self.clock.tick(self.config.target_fps) / 1000.0
             t = time.time()
@@ -2485,6 +2518,8 @@ class ChibiAvatarApp:
                     elif event.key == pygame.K_F2:
                         # Open the dream journal viewer
                         self._open_dream_view()
+                    elif event.key == pygame.K_F4:
+                        self._buddy_out()
                     elif event.key == pygame.K_F3:
                         # …and the settings panel, for the same reason F1 and
                         # F2 exist: the gear is a small target on a screen
@@ -2508,6 +2543,11 @@ class ChibiAvatarApp:
                     self.send_message(submitted)
 
             self.update(dt)
+            self._pump_buddy()
+            if self.buddy.out:
+                # She is out on the desktop and this window is hidden, so
+                # nothing drawn here would be seen.
+                continue
 
             # Draw
             self.draw_background(t)
@@ -2696,6 +2736,7 @@ class ChibiAvatarApp:
 
             pygame.display.flip()
 
+        self.buddy.stop()
         pygame.quit()
         # Final memory extraction and save — skipped when the LLM is
         # unreachable, so quitting can't block on a long network timeout.

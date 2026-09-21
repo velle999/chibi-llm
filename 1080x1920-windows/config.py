@@ -96,6 +96,16 @@ class Config:
     chibi_blink_interval: float = 3.5  # Seconds between blinks
     chibi_blink_duration: float = 0.15 # Blink duration in seconds
 
+    # ── Buddy mode — chibi loose on the desktop (F4, or `--buddy`) ──────
+    # Needs a Wayland desktop with layer-shell and gtk4-layer-shell; see
+    # buddy.py. Her size out there is this fraction of her size in the window.
+    buddy_scale: float = 0.55
+    # Monitor connector to roam, e.g. "DP-1". Empty = the one her window is on.
+    buddy_output: str = ""
+    # Float up onto the tops of windows (synui and Hyprland report where
+    # windows are; anywhere else she keeps to the bottom of the screen).
+    buddy_climb: bool = True
+
     # ── Behavior ─────────────────────────────────────────────────────────
     sleep_timeout: float = 120.0        # Seconds of inactivity before sleep
     max_conversation_history: int = 20  # Messages to keep in context

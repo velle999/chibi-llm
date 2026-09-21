@@ -18,6 +18,7 @@ A kawaii AI companion that lives on your Raspberry Pi 4. Chibi is a voice-intera
 - **Cyberpunk HUD** — clock, weather panel, scrolling ticker, camera PiP, neon everything
 - **Ollama & llama.cpp** — works with either backend on your PC
 - **Thoth mode** — a second AI aspect within Chibi's soul system, invoked for deep symbolic analysis, dream journaling, and cross-tradition pattern recognition
+- **Buddy mode** — press ✦ (or F4) and Chibi leaves her window to wander your desktop: she walks along the bottom of the screen, floats up onto window tops and talks in a speech bubble. Needs a Wayland desktop with layer-shell — see [Buddy mode](#buddy-mode)
 
 ### Thoth Mode
 
@@ -114,10 +115,49 @@ python3 main.py
 | Type + Enter | Send text message |
 | F1 | Toggle microphone |
 | F2 | Dream journal viewer (↑/↓ navigate, Enter read, Esc close) |
+| F3 | Settings panel (name and city) |
+| F4, or ✦ top right | Buddy mode: Chibi goes out onto the desktop |
+| F11 | Switch between fullscreen and a window |
 | Escape | Quit |
 | Any key during alarm | Dismiss alarm |
 
 Voice: say **"computer"** (the wake word) to address Chibi, then talk naturally — the conversation window stays open for follow-ups after each exchange. Ambient speech and the TV are ignored while the window is closed.
+
+## Buddy mode
+
+Chibi can leave her window and live on your desktop. Click ✦ in the window's top-right corner, press **F4**, or start straight into it:
+
+```bash
+python3 main.py --buddy
+```
+
+Out on the desktop she walks along the bottom of the screen (above any panel or dock), floats up onto the tops of windows, rides along when a window is moved, and hops back down. Everything she says appears in a speech bubble over her head and clears once it has been read. Voice, the wake word, alarms and impulses all keep working while she is out, and the rest of the desktop stays clickable around her.
+
+| Mouse | Action |
+|-------|--------|
+| Click her | Pet her |
+| Double-click her | Type to her (Enter sends, Esc closes) |
+| Drag her | Carry her; let go and she drops onto whatever is below |
+| Right-click her | Menu: talk, microphone on/off, go home, quit |
+| Click the bubble | Dismiss it |
+
+**Go home** in her menu brings her back into the window.
+
+**Requirements:** a Wayland desktop whose compositor supports wlr-layer-shell (synui, Hyprland, Sway, KDE Plasma, labwc and others), plus gtk4-layer-shell, PyGObject and pycairo. On Arch:
+
+```bash
+sudo pacman -S gtk4-layer-shell python-gobject python-cairo
+```
+
+She climbs onto windows on synui and Hyprland, which report where windows are; on other compositors she keeps to the bottom of the screen.
+
+**Settings** (in `config.local.py`):
+
+| Setting | Default | |
+|---------|---------|---|
+| `buddy_scale` | `0.55` | Her size on the desktop, as a fraction of her size in the window |
+| `buddy_output` | `""` | Monitor to roam, by connector name (e.g. `"DP-1"`); empty means the one her window is on |
+| `buddy_climb` | `True` | Float up onto window tops |
 
 ## Project Structure
 
@@ -126,6 +166,8 @@ chibi-llm/
 ├── main.py              # App core, state machine, event loop, draw
 ├── config.py            # All settings in one place (+ config.local.py overrides)
 ├── sprite_renderer.py   # Kawaii chibi character (procedural)
+├── chat_bubble.py       # Speech bubble, shared by the window and buddy mode
+├── buddy.py             # Buddy mode: the desktop overlay (GTK 4 layer-shell) and chibi's link to it
 ├── llm_client.py        # Ollama/llama.cpp streaming client + health check
 ├── voice_input.py       # Whisper STT (arecord/pw-record capture, optional openWakeWord)
 ├── voice_output.py      # Piper TTS with pitch shifting
