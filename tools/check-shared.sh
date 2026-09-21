@@ -30,6 +30,7 @@ SHARED=(
     icons.py
     llm_client.py
     main.py
+    reply_length.py
     secfeed.py
     thoth_rag.py
     voice_input.py

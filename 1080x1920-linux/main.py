@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from llm_client import LLMClient
 from sprite_renderer import ChibiRenderer
 from chat_bubble import ChatBubble
+from reply_length import shape_for
 import icons
 from buddy import BuddyLink
 from voice_input import VoiceInput
@@ -319,6 +320,9 @@ class ChibiAvatarApp:
         # Reset by anything that really addresses her: her name, the wake word,
         # typed input, or a fresh impulse of her own.
         self._unaddressed_streak = 0
+        # The kind of the last reply (see reply_length.py), so "another one"
+        # after a story gets a story and not a one-liner.
+        self._last_reply_kind = "chat"
 
         # Components
         self.renderer = ChibiRenderer(self.config)
@@ -1493,8 +1497,10 @@ class ChibiAvatarApp:
         return True
 
     # Sentence boundary for streaming TTS: terminal punctuation, optional
-    # closing quote/bracket, then whitespace.
-    _SENTENCE_END = re.compile(r"[.!?][\"')\]]*\s")
+    # closing quote/bracket, then whitespace. A line break counts too: a
+    # list of headlines has no full stops, and without it the whole list was
+    # read as one sentence with no pauses.
+    _SENTENCE_END = re.compile(r"[.!?][\"')\]]*\s|\n")
 
     def _speak_streamed(self, text: str, upto: int) -> int:
         """Queue newly completed sentences in text[upto:] for TTS.
@@ -1615,18 +1621,25 @@ class ChibiAvatarApp:
                     f"Camera sees: {self.vision.last_description}"
                 )
 
+            latest_user = next(
+                (m["content"] for m in reversed(self.conversation)
+                 if m["role"] == "user"), "")
+            # How long this reply should be: a line for chat, a paragraph for
+            # an explanation or the news, the whole thing for a story. The
+            # scribe keeps its own budget and rules.
+            shape = (None if self.horus_mode else
+                     shape_for(latest_user, self.config, self._last_reply_kind))
+
             # Only inject the live weather/market/time block when the latest
             # message is actually about it. Dumping it every turn is what made
             # Chibi regurgitate forecasts and tickers unprompted; gating it
             # removes the temptation entirely for off-topic messages.
-            latest_user = next(
-                (m["content"] for m in reversed(self.conversation)
-                 if m["role"] == "user"), "")
             if (live_context and not self.horus_mode and not self.security_mode
-                    and self._wants_live_data(latest_user)):
+                    and (self._wants_live_data(latest_user)
+                         or shape.kind == "news")):
                 extra_system += (
                     "\n\n--- BACKGROUND REFERENCE DATA (DO NOT mention unless asked) ---\n"
-                    f"This data is available if {self.config.user_name} asks about weather, time, stocks, or crypto. "
+                    f"This data is available if {self.config.user_name} asks about weather, time, news, stocks, or crypto. "
                     "Do NOT volunteer this information. Only use it to answer relevant questions.\n"
                     + live_context
                 )
@@ -1636,8 +1649,11 @@ class ChibiAvatarApp:
                     if cal_ctx:
                         extra_system += "\n" + cal_ctx
 
-            num_predict = (self.config.horus_num_predict if self.horus_mode
-                           else self.config.llm_num_predict)
+            if shape is None:
+                num_predict = self.config.horus_num_predict
+            else:
+                num_predict = shape.tokens
+                extra_system += shape.guidance
 
             # Pause the recorder for the whole generate+speak cycle. (The
             # muted flag in update() also guards this; stopping the recorder
@@ -1664,16 +1680,24 @@ class ChibiAvatarApp:
 
             # Speak the tail after the last sentence boundary. If num_predict
             # clipped the reply mid-sentence, drop the dangling fragment from
-            # speech (the bubble still shows the full text).
+            # speech (the bubble still shows the full text). A tail with no
+            # full stop is not always clipped: the last line of a list has
+            # none. A reply well short of its budget finished on its own, so
+            # its tail is spoken. English runs about four characters a token,
+            # so three per token of budget is a conservative "nearly used up".
             if stream_tts:
                 tail = full_response[spoken_upto:].strip()
                 if tail:
-                    if re.search(r"[.!?][\"')\]]*$", tail) or spoken_upto == 0:
+                    under_budget = len(full_response) < num_predict * 3
+                    if (re.search(r"[.!?][\"')\]]*$", tail) or spoken_upto == 0
+                            or under_budget):
                         self.voice_out.speak(tail)
                     else:
                         print(f"[TTS] Skipped clipped tail: {tail[:60]!r}")
 
             self.conversation.append({"role": "assistant", "content": full_response})
+            if shape is not None:
+                self._last_reply_kind = shape.kind
             self.is_generating = False
             # Soul takes note of the exchange (mood shift, topics, milestones)
             if self.soul:
@@ -1693,15 +1717,25 @@ class ChibiAvatarApp:
             # (speech was already queued sentence-by-sentence during streaming)
             # Briefly show happy, then idle
             self.set_state(AvatarState.HAPPY)
-            # Wait for TTS to finish with a hard timeout
+            # Wait for TTS to finish, with a hard timeout in case it hangs.
+            # The timeout scales with the reply: a story takes minutes to
+            # read, and a flat 30 s ended her turn partway through it, so she
+            # went idle and the recorder restarted while she was still talking.
             if self.voice_out:
                 tts_wait_start = time.time()
-                while self.voice_out.busy and (time.time() - tts_wait_start) < 30:
+                tts_limit = max(30.0, len(full_response) / 10 + 10)
+                while (self.voice_out.busy
+                       and (time.time() - tts_wait_start) < tts_limit):
                     time.sleep(0.1)
                 # Extra settle time so mic doesn't catch tail end of audio
                 time.sleep(0.8)
             else:
                 time.sleep(2.0)
+
+            # The follow-up window was opened when the text finished, which
+            # for a long reply is well before she stops talking. Open it again
+            # now, so "another one" after a story works without the wake word.
+            self._open_wake_window()
 
             # Resume mic listening
             if self.voice_in and self.config.voice_enabled:
@@ -2505,6 +2539,11 @@ class ChibiAvatarApp:
                 if self.settings_open:
                     if event.type == pygame.KEYDOWN:
                         self._handle_settings_key(event)
+                    continue
+
+                # A reply too long for the space above her head scrolls:
+                # drag it, wheel it, or use its scrollbar.
+                if self.bubble.handle_event(event):
                     continue
 
                 if event.type == pygame.KEYDOWN:

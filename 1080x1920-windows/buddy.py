@@ -850,12 +850,16 @@ def run_helper():
 
             cx = self.x + self.w / 2
             head = self.y + (HEAD_TOP - FEET) * s
-            size = self.bubble.size()
+            # A long reply is capped to the room above her head and scrolls
+            # with the typing, rather than growing down over her.
+            room = head - 6
+            size = self.bubble.size(room)
             if size and not self.entry_open:
                 bw, bh = size
                 left = max(4, min(W - bw - 4, cx - bw / 2))
                 top = max(4, head - bh - 2)
-                surf = self.bubble.render(tail_dx=cx - (left + bw / 2))
+                surf = self.bubble.render(tail_dx=cx - (left + bw / 2),
+                                          max_height=room)
                 data = bytearray(pygame.image.tobytes(surf.premul_alpha(), "BGRA"))
                 self.bubble_img = cairo.ImageSurface.create_for_data(
                     data, cairo.FORMAT_ARGB32, bw, bh, bw * 4)

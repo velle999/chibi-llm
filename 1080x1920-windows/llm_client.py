@@ -39,6 +39,10 @@ _SYNAPD_VER = 1
 _SYNAPD_MSG_QUERY = 0x01
 _SYNAPD_MSG_EMBED = 0x0B
 _SYNAPD_MSG_ERROR = 0xFF
+# QUERY header flags: the low 15 bits are the reply's token budget, where
+# 0 means synapd's default (512). synapd builds older than the flags ignore
+# them and use the default, so sending a budget is always safe.
+_SYNAPD_QF_TOKENS_MASK = 0x7FFF
 
 
 def synapd_embed(text: str, *, socket_path: str = "/run/synapd/synapd.sock",
@@ -182,9 +186,10 @@ class LLMClient:
                     num_predict: int | None = None):
         """Generator that yields text chunks from the LLM.
 
-        num_predict caps the reply length (Ollama). None falls back to the
-        configured llm_num_predict; callers pass a larger value for modes
-        that legitimately need a longer answer (e.g. the Thoth scribe).
+        num_predict caps the reply length, in tokens, on every backend. None
+        falls back to the configured llm_num_predict; callers pass a larger
+        value when the request needs a longer answer (reply_length.py) and
+        for the Thoth scribe.
         """
         max_msgs = self.config.max_conversation_history
         if len(messages) > max_msgs:
@@ -218,6 +223,10 @@ class LLMClient:
         for the avatar's bubble/voice to animate as if streamed. The daemon
         prepends its own system prompt; chibi's persona is folded into the
         prompt text so the reply still sounds like chibi.
+
+        num_predict goes in the header flags as the token budget. Without it
+        synapd used its 512-token default for every reply, so the budget
+        chosen per request made no difference on this backend.
         """
         system_prompt = self.config.llm_system_prompt + extra_system
         prompt = system_prompt + "\n\n"
@@ -229,8 +238,9 @@ class LLMClient:
         # Null-terminate so synapd reads a clean C string, mirroring how it
         # frames its own responses (strlen + 1).
         payload = prompt.encode("utf-8") + b"\x00"
+        flags = max(0, min(int(num_predict or 0), _SYNAPD_QF_TOKENS_MASK))
         header = _SYNAPD_HDR.pack(
-            _SYNAPD_MAGIC, _SYNAPD_VER, _SYNAPD_MSG_QUERY, 0,
+            _SYNAPD_MAGIC, _SYNAPD_VER, _SYNAPD_MSG_QUERY, flags,
             len(payload), 1, os.getpid(), 0,
         )
 
@@ -271,11 +281,12 @@ class LLMClient:
                     pass
 
     # A new conversational turn beginning inside the reply, in any dialect the
-    # model might resume: chat-template control tokens, or the plain-text
-    # "User:"-style labels the transcript prompt itself uses.
+    # model might resume: chat-template control tokens, the plain-text
+    # "User:"-style labels the transcript prompt itself uses, or an "[END]"
+    # marker the model writes after a long piece (seen after stories).
     _TURN_BREAK = re.compile(
         r"<\|im_start\|>|<\|im_end\|>|<\|user\|>|<\|assistant\|>|<\|system\|>"
-        r"|</s>|\n\s*(?:user|assistant|system)\s*:",
+        r"|</s>|\n\s*(?:user|assistant|system)\s*:|\[\s*end\b[^\]\n]{0,30}\]",
         re.IGNORECASE,
     )
 

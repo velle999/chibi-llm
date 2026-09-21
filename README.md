@@ -8,6 +8,7 @@ A kawaii AI companion that lives on your Raspberry Pi 4. Chibi is a voice-intera
 
 - **Kawaii chibi avatar** — procedurally drawn with Pygame, cat ears, star-pupil eyes, floating hearts/sparkles, expressive animations across 8 states
 - **Voice conversation** — Whisper STT + Piper TTS with a cute pitched-up British voice; responses are spoken sentence-by-sentence as they stream from the LLM
+- **Replies sized to the request** — chat gets a line or two; "explain", "why", "how do I" and "what's in the news" get a paragraph or a rundown of headlines; "tell me a story", a poem or a song gets the whole piece. "Another one" or "keep going" after a story gets another story
 - **Wake word** — say **"computer"** to get Chibi's attention (Whisper-tiny can't reliably hear "Chibi"; a custom openWakeWord model can bring the real name back — see `oww_enabled` in config). After any exchange a short conversation window stays open so follow-ups don't need the wake word
 - **Soul system** — persistent mood and relationship arc (`~/.chibi-soul.json`): milestones and chat streaks, emotional mirroring, topic callbacks, and spontaneous impulses (morning greetings, storm excitement, "you've been in that app for 2 hours"). Optional extras: system monitoring (psutil), screen awareness (off by default), and calendar reminders via an ICS URL
 - **Persistent memory** — remembers your name, preferences, and past conversations across restarts
@@ -118,6 +119,7 @@ python3 main.py
 | F3 | Settings panel (name and city) |
 | F4, or ✦ top right | Buddy mode: Chibi goes out onto the desktop |
 | F11 | Switch between fullscreen and a window |
+| Drag, wheel or scrollbar on a long reply | Scroll back through it (scroll to the bottom to follow the newest line again) |
 | Escape | Quit |
 | Any key during alarm | Dismiss alarm |
 
@@ -168,7 +170,8 @@ chibi-llm/
 ├── sprite_renderer.py   # Kawaii chibi character (procedural)
 ├── chat_bubble.py       # Speech bubble, shared by the window and buddy mode
 ├── buddy.py             # Buddy mode: the desktop overlay (GTK 4 layer-shell) and chibi's link to it
-├── llm_client.py        # Ollama/llama.cpp streaming client + health check
+├── llm_client.py        # Ollama/llama.cpp/synapd streaming client + health check
+├── reply_length.py      # How long a reply may be, from what was asked
 ├── voice_input.py       # Whisper STT (arecord/pw-record capture, optional openWakeWord)
 ├── voice_output.py      # Piper TTS with pitch shifting
 ├── soul.py              # Inner life: mood, milestones, impulses, system/calendar awareness
@@ -191,10 +194,13 @@ Edit `config.py`. Key settings:
 ### LLM Server
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `llm_host` | `192.168.40.153` | Your PC's IP |
+| `llm_host` | `127.0.0.1` | Host running Ollama (set your PC's address in `config.local.py`) |
 | `llm_port` | `11434` | Ollama default |
 | `llm_model` | `mistral` | Chat model name |
-| `llm_backend` | `ollama` | `ollama` or `llamacpp` |
+| `llm_backend` | `ollama` | `ollama`, `llamacpp` or `synapd` |
+| `llm_num_predict` | `110` | Reply cap in tokens for chat |
+| `llm_num_predict_explain` | `300` | Reply cap for explanations and the news |
+| `llm_num_predict_long` | `600` | Reply cap for a story, poem or song |
 
 ### Voice
 | Setting | Default | Description |

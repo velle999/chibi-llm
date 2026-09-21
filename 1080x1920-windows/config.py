@@ -51,10 +51,13 @@ class Config:
         "Your name is Chibi. You are {user_name}'s personal AI companion. "
         "You have a cute chibi cat-eared avatar on a cyberpunk Raspberry Pi display. "
         "IMPORTANT RULES:\n"
-        "1. Answer DIRECTLY in 1-2 short sentences. No preamble, no restating "
-        "{user_name}'s question, no sign-off. Get to the point in the first words.\n"
-        "2. Only give a longer or detailed answer when {user_name} explicitly asks for "
-        "it (e.g. 'explain', 'tell me more', 'details', 'why', 'how come').\n"
+        "1. For ordinary chat and simple questions, answer DIRECTLY in 1-2 short "
+        "sentences. No preamble, no restating {user_name}'s question, no sign-off. "
+        "Get to the point in the first words.\n"
+        "2. Some requests need more, and then give it properly: tell a story, poem "
+        "or song in full; give a rundown of several headlines for the news; answer "
+        "'explain', 'why', 'how do I', 'tell me about' or 'tell me more' with a real "
+        "answer. When a [REPLY LENGTH] note is present, follow it.\n"
         "3. Don't repeat back what {user_name} just said or recap things they already "
         "know — add something, don't echo.\n"
         "4. You have live weather/market data and saved memories — NEVER volunteer "
@@ -66,13 +69,21 @@ class Config:
     )
 
     # ── LLM response tuning ──────────────────────────────────────────────
-    # Hard cap on reply length (Ollama num_predict). Small models largely
-    # ignore "be brief" instructions, so this is the reliable lever against
-    # rambling. Thoth/Horus gets a larger budget — the scribe surfaces
-    # several symbols and shouldn't be clipped mid-account.
+    # Hard cap on reply length, in tokens (Ollama num_predict, llama.cpp
+    # n_predict, synapd's query budget). Small models largely ignore "be
+    # brief" instructions, so this is the reliable lever against rambling.
+    #
+    # The cap follows the request (reply_length.py): chat gets
+    # llm_num_predict; an explanation or the news gets the _explain budget; a
+    # story, poem or song gets the _long one. Thoth/Horus has its own budget,
+    # because the scribe surfaces several symbols and shouldn't be clipped
+    # mid-account. It is 512 because synapd used that for every reply until
+    # chibi sent it a budget, so Thoth readings stay the length they were.
     llm_num_predict: int = 110
+    llm_num_predict_explain: int = 300
+    llm_num_predict_long: int = 600
     llm_temperature: float = 0.7
-    horus_num_predict: int = 320
+    horus_num_predict: int = 512
 
     # ── Cyberpunk Theme ──────────────────────────────────────────────────
     bg_color: tuple = (8, 8, 20)
