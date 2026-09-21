@@ -243,6 +243,20 @@ class Config:
     # Presence is speech heard recently — chibi is already listening.
     brainlog_require_presence: bool = True
     brainlog_presence_window: float = 600.0
+    # Does ordinary NOISE count as someone being in the room?
+    #
+    # Yes, by default, and the two questions are genuinely different. "Is this
+    # speech for me?" must be strict — that is what the name test and the
+    # unaddressed cap are for, and it stays strict. "Is anybody in here?" does
+    # not have to be: in a bedroom the television is only ever on because
+    # somebody switched it on, so the sound of it is as good a sign of
+    # occupancy as a voice. Set False for a room where something might be
+    # playing to nobody.
+    brainlog_presence_sound: bool = True
+    # A question nobody answered is retried rather than lost, since presence
+    # can be right about the room and wrong about the moment.
+    brainlog_max_attempts: int = 3
+    brainlog_retry_after: float = 1200.0
 
     # ── Kiosk: the pointer ───────────────────────────────────────────────
     # Seconds of stillness before the cursor is hidden. An arrow parked in the

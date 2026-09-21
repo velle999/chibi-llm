@@ -65,6 +65,19 @@ def mark_asked():
     _save_state(st)
 
 
+def unmark_asked():
+    """Put today's question back on the table.
+
+    Called when a question was asked and nothing answered it. Without this a
+    question spoken into a room where the person had headphones on, or had
+    stepped out, or simply did not feel like talking, is gone for the day —
+    and the day is the whole unit here.
+    """
+    st = _load_state()
+    st.pop("asked", None)
+    _save_state(st)
+
+
 def due(hour, minute=0):
     """Is it time, and has today's question not been asked yet?
 

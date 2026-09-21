@@ -497,6 +497,11 @@ class ChibiAvatarApp:
         # Last time real speech was heard, which is how chibi knows the room
         # is occupied. 0 means "not since startup".
         self._last_voice_at = 0.0
+        # Any sound at all, which is a weaker claim than a voice and is
+        # deliberately judged against a looser bar. See brainlog_presence_sound.
+        self._last_sound_at = 0.0
+        self._brainlog_attempts = 0
+        self._brainlog_retry_at = 0.0
         # Kiosk pointer hiding. Starts visible: a cursor that was never shown
         # cannot be found by someone who needs it.
         self._cursor_idle = 0.0
@@ -1838,10 +1843,14 @@ class ChibiAvatarApp:
                 or getattr(self, "horus_mode", False)
                 or getattr(self, "security_mode", False)):
             return
+        if time.time() < self._brainlog_retry_at:
+            return
         if getattr(self.config, "brainlog_require_presence", True):
             window = getattr(self.config, "brainlog_presence_window", 600.0)
-            if not self._last_voice_at or (
-                    time.time() - self._last_voice_at > window):
+            seen = self._last_voice_at
+            if getattr(self.config, "brainlog_presence_sound", True):
+                seen = max(seen, self._last_sound_at)
+            if not seen or (time.time() - seen > window):
                 return
         if brainlog_bridge.due(getattr(self.config, "brainlog_hour", 20),
                                getattr(self.config, "brainlog_minute", 0)):
@@ -1909,6 +1918,11 @@ class ChibiAvatarApp:
             self._brainlog_timer = 0.0
             self._check_brainlog_question()
         self._deliver_brainlog_question()
+        # Sample the noise gate every frame: is_recording is transient and
+        # goes false again as soon as the sound stops.
+        if self.voice_in is not None and self.voice_in.is_recording:
+            self._last_sound_at = time.time()
+
         self._update_cursor(dt)
 
         # ⛔ STOP WAITING. Without this the flag stays set until something is
@@ -1919,7 +1933,18 @@ class ChibiAvatarApp:
         if (self._brainlog_awaiting
                 and time.time() - self._brainlog_asked_at > 180.0):
             self._brainlog_awaiting = False
-            print("[brainlog] no answer; dropped the question")
+            self._brainlog_attempts += 1
+            cap = getattr(self.config, "brainlog_max_attempts", 3)
+            if self._brainlog_attempts < cap:
+                # Presence was right about the room and wrong about the
+                # moment. Put the question back and wait a while.
+                brainlog_bridge.unmark_asked()
+                self._brainlog_retry_at = time.time() + getattr(
+                    self.config, "brainlog_retry_after", 1200.0)
+                print(f"[brainlog] no answer; will ask again "
+                      f"({self._brainlog_attempts}/{cap})")
+            else:
+                print("[brainlog] no answer; done for today")
 
         # Sentinel: narrate verdicts that landed since the last frame.
         self._announce_security_events()
