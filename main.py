@@ -493,6 +493,11 @@ class ChibiAvatarApp:
         # heard is an answer rather than a remark addressed to chibi.
         self._brainlog_timer = 0.0
         self._brainlog_awaiting = False
+        self._brainlog_asked_at = 0.0
+        # Kiosk pointer hiding. Starts visible: a cursor that was never shown
+        # cannot be found by someone who needs it.
+        self._cursor_idle = 0.0
+        self._cursor_hidden = False
 
         # Horus / Thoth mode
         self.horus_mode = False
@@ -1788,6 +1793,26 @@ class ChibiAvatarApp:
             if not self.is_generating:
                 self.set_state(AvatarState.IDLE)
 
+    def _update_cursor(self, dt):
+        """Hide the pointer once it has been still long enough."""
+        idle = getattr(self.config, "hide_cursor_idle", 4.0)
+        if not idle or idle <= 0:
+            if self._cursor_hidden:
+                pygame.mouse.set_visible(True)
+                self._cursor_hidden = False
+            return
+        self._cursor_idle += dt
+        if not self._cursor_hidden and self._cursor_idle >= idle:
+            pygame.mouse.set_visible(False)
+            self._cursor_hidden = True
+
+    def _wake_cursor(self):
+        """Movement brings it back."""
+        self._cursor_idle = 0.0
+        if self._cursor_hidden:
+            pygame.mouse.set_visible(True)
+            self._cursor_hidden = False
+
     def _check_brainlog_question(self):
         """Once a minute: is today's question due? If so, start fetching it.
 
@@ -1827,6 +1852,7 @@ class ChibiAvatarApp:
 
         brainlog_bridge.mark_asked()
         self._brainlog_awaiting = True
+        self._brainlog_asked_at = time.time()
         self.bubble.set_text(question)
         if self.voice_out:
             self.voice_out.speak_now(question)
@@ -1839,6 +1865,7 @@ class ChibiAvatarApp:
     def _take_brainlog_answer(self, text):
         """Hand what was heard to brainlog, and say so."""
         self._brainlog_awaiting = False
+        self._brainlog_asked_at = 0.0
         print(f"[brainlog] answer: {text!r}")
 
         def done(ok, title):
@@ -1867,6 +1894,17 @@ class ChibiAvatarApp:
             self._brainlog_timer = 0.0
             self._check_brainlog_question()
         self._deliver_brainlog_question()
+        self._update_cursor(dt)
+
+        # ⛔ STOP WAITING. Without this the flag stays set until something is
+        # heard, so a question asked at eight and left unanswered would file
+        # whatever the room said at midnight — the television, a phone call,
+        # someone talking to the dog — as that evening's memory, in the
+        # person's own archive, under a question they never answered.
+        if (self._brainlog_awaiting
+                and time.time() - self._brainlog_asked_at > 180.0):
+            self._brainlog_awaiting = False
+            print("[brainlog] no answer; dropped the question")
 
         # Sentinel: narrate verdicts that landed since the last frame.
         self._announce_security_events()
@@ -2290,6 +2328,9 @@ class ChibiAvatarApp:
                         surf = pygame.display.get_surface()
                     self._adopt_surface_size(surf)
                     continue
+
+                if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
+                    self._wake_cursor()
 
                 # Window controls are drawn above every overlay, so they must
                 # get first refusal on clicks — including while the dream

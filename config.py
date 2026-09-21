@@ -236,6 +236,17 @@ class Config:
     brainlog_minute: int = 0
     # Ask about people and practicalities instead of memories.
     brainlog_roster: bool = False
+
+    # ── Kiosk: the pointer ───────────────────────────────────────────────
+    # Seconds of stillness before the cursor is hidden. An arrow parked in the
+    # middle of a screen that is otherwise a face is the one thing that makes
+    # a kiosk look like a computer someone walked away from.
+    #
+    # ⛔ HIDDEN, NOT DISABLED. Chibi has a clickable panel and hover states, so
+    # the pointer comes straight back on the first movement — hiding it for
+    # good would make those unreachable without a keyboard.
+    # 0 disables the behaviour and leaves the cursor alone.
+    hide_cursor_idle: float = 4.0
     # Screen awareness: periodic screenshot → vision model. OFF by default,
     # and pointless on the Pi kiosk (it would only see Chibi herself) —
     # meant for a desktop machine. Needs scrot/maim (X11) plus Pillow.
