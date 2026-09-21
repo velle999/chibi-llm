@@ -236,6 +236,13 @@ class Config:
     brainlog_minute: int = 0
     # Ask about people and practicalities instead of memories.
     brainlog_roster: bool = False
+    # ⛔ ONLY ASK WHEN SOMEONE IS THERE. brainlog_hour is the EARLIEST hour,
+    # not the time: a machine in a bedroom reaches 20:00 with nobody in the
+    # room, and asking anyway spends the day's question on an empty room and
+    # then stays silent when the person actually walks in at bedtime.
+    # Presence is speech heard recently — chibi is already listening.
+    brainlog_require_presence: bool = True
+    brainlog_presence_window: float = 600.0
 
     # ── Kiosk: the pointer ───────────────────────────────────────────────
     # Seconds of stillness before the cursor is hidden. An arrow parked in the

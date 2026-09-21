@@ -494,6 +494,9 @@ class ChibiAvatarApp:
         self._brainlog_timer = 0.0
         self._brainlog_awaiting = False
         self._brainlog_asked_at = 0.0
+        # Last time real speech was heard, which is how chibi knows the room
+        # is occupied. 0 means "not since startup".
+        self._last_voice_at = 0.0
         # Kiosk pointer hiding. Starts visible: a cursor that was never shown
         # cannot be found by someone who needs it.
         self._cursor_idle = 0.0
@@ -1287,6 +1290,13 @@ class ChibiAvatarApp:
             # Explicitly addressed — a real conversation is on. Window-only
             # accepts start counting from zero again.
             self._unaddressed_streak = 0
+            # ⛔ THE ONLY HONEST PRESENCE SIGNAL. "A transcription arrived" is
+            # not one: this machine sits in a bedroom where the television
+            # talks all evening, which is the whole reason the unaddressed
+            # filter exists. A human names her now and then; the TV never
+            # does — so her name, and nothing else, means the room is
+            # occupied by someone who could answer a question.
+            self._last_voice_at = time.time()
             return True
         if self.horus_mode or self.security_mode:
             return True
@@ -1828,6 +1838,11 @@ class ChibiAvatarApp:
                 or getattr(self, "horus_mode", False)
                 or getattr(self, "security_mode", False)):
             return
+        if getattr(self.config, "brainlog_require_presence", True):
+            window = getattr(self.config, "brainlog_presence_window", 600.0)
+            if not self._last_voice_at or (
+                    time.time() - self._last_voice_at > window):
+                return
         if brainlog_bridge.due(getattr(self.config, "brainlog_hour", 20),
                                getattr(self.config, "brainlog_minute", 0)):
             brainlog_bridge.request_question(
@@ -2026,6 +2041,7 @@ class ChibiAvatarApp:
         if self.voice_in and self.voice_in.consume_wake_detection():
             print("[Voice] Wake word detected (openWakeWord)")
             self._unaddressed_streak = 0
+            self._last_voice_at = time.time()   # presence, same as the name
             self._open_wake_window()
             if self.state == AvatarState.SLEEPING:
                 self.set_state(AvatarState.IDLE)
