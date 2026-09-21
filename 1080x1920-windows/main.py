@@ -1796,7 +1796,12 @@ class ChibiAvatarApp:
         """
         if not getattr(self.config, "brainlog_enabled", True):
             return
-        if self._brainlog_awaiting or self.horus_mode or self.security_mode:
+        # getattr: security_mode and horus_mode are aspects that arrived at
+        # different times, and this same module runs on installs older than
+        # either. A missing aspect means "not in it", not a crash.
+        if (self._brainlog_awaiting
+                or getattr(self, "horus_mode", False)
+                or getattr(self, "security_mode", False)):
             return
         if brainlog_bridge.due(getattr(self.config, "brainlog_hour", 20),
                                getattr(self.config, "brainlog_minute", 0)):

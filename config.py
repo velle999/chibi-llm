@@ -221,10 +221,15 @@ class Config:
     impulse_min_interval: float = 300.0
 
     # ── brainlog: one question a day, asked out loud ─────────────────────
-    # Chibi asks; brainlog owns the archive (see brainlog_bridge.py). Off on
-    # a machine without the `brainlog` command, which is the right answer
-    # rather than an error — the Pi may not carry the archive.
-    brainlog_enabled: bool = True
+    # Chibi asks; brainlog owns the archive (see brainlog_bridge.py).
+    #
+    # ⛔ OFF BY DEFAULT, like every other optional aspect here. brainlog is a
+    # personal, unpackaged tool — this package ships to machines that have no
+    # `brainlog` command and never will, and a setting that defaults to on
+    # advertises a feature they cannot use. The bridge degrades to nothing on
+    # such a machine anyway, but "harmless when it fires" is not a reason to
+    # arm it for everyone. Turn it on in config.local.py.
+    brainlog_enabled: bool = False
     # "At or after", checked about once a minute, once per day. A question
     # that only fires in a one-minute window is one that mostly never fires.
     brainlog_hour: int = 20
